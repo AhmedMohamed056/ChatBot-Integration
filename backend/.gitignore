@@ -1,0 +1,17 @@
+# Environment
+.env
+.env.*
+
+# Virtual environment
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+
+# Chroma
+chroma_db/
+temp_chroma_db/
+
+# VS Code
+.vscode/

@@ -1,17 +1,12 @@
-# Environment
-.env
-.env.*
-
-# Virtual environment
+# Root virtual environment (legacy location)
 venv/
 .venv/
 
 # Python cache
 __pycache__/
+*.py[cod]
 
-# Chroma
-chroma_db/
-temp_chroma_db/
-
-# VS Code
+# OS / editor
+.DS_Store
+Thumbs.db
 .vscode/
