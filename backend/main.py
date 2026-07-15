@@ -1,8 +1,11 @@
 import os
 import glob
+import shutil
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -19,8 +22,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# ---- إعدادات المستندات الثابتة ----
-# حط ملفات الـ PDF بتاعتك في المجلد ده، وهيتقروا مرة واحدة لما السيرفر يشتغل
+# ---- إعدادات المستندات ----
 STATIC_PDF_DIR = "static_pdfs"
 DB_DIR = "chroma_db"
 os.makedirs(STATIC_PDF_DIR, exist_ok=True)
@@ -38,8 +40,10 @@ app.add_middleware(
 # ملحوظة: في production حقيقي الأفضل تستخدم DB أو Redis بدل الـ dict العادي
 sessions = {}  # session_id -> {"messages": [...]}
 
-# ---- قاعدة المعرفة (qa_chain) بتتبني مرة واحدة بس، مش لكل يوزر ----
+# ---- قاعدة المعرفة بتتبني مرة واحدة، والإضافة تتم عبر /upload ----
 qa_chain = None
+embeddings = None
+vectordb = None
 
 
 class ChatRequest(BaseModel):
@@ -51,44 +55,32 @@ class ChatResponse(BaseModel):
     reply: str
 
 
-def build_rag_chain(pdf_paths: list[str]):
+def get_embeddings():
+    global embeddings
+    if embeddings is None:
+        embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-base")
+    return embeddings
+
+
+def split_pdfs(pdf_paths: list[str]):
     documents = []
     for path in pdf_paths:
         loader = PyMuPDFLoader(path)
         documents.extend(loader.load())
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-    split_docs = text_splitter.split_documents(documents)
+    return text_splitter.split_documents(documents)
 
-    embeddings = HuggingFaceEmbeddings( model_name="intfloat/multilingual-e5-base" )
-    
-    if os.path.exists(DB_DIR) and os.listdir(DB_DIR):
-        print("📂 Loading existing Chroma database...")
-        vectordb = Chroma(
-            persist_directory=DB_DIR,
-            embedding_function=embeddings,
-       )
-    else:
-        print("📚 Creating new Chroma database...")
 
-        vectordb = Chroma.from_documents(
-            documents=split_docs,
-            embedding=embeddings,
-            persist_directory=DB_DIR,
-       )
-
-    retriever = vectordb.as_retriever(
-        search_kwargs={
-            "k": 3
-       }
-   )
+def build_qa_chain_from_vectordb(db):
+    retriever = db.as_retriever(search_kwargs={"k": 3})
 
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         temperature=0.0,
         google_api_key=GOOGLE_API_KEY,
-        max_retries=1,   # لو جوجل مزحومة (503)، افشل بسرعة بدل ما تستنى دقايق
-        timeout=30,      # ثانية كحد أقصى لكل نداء للموديل
+        max_retries=1,
+        timeout=30,
     )
 
     contextualize_q_system_prompt = (
@@ -137,17 +129,70 @@ Context:
     return create_retrieval_chain(history_aware_retriever, question_answer_chain)
 
 
+def build_rag_chain(pdf_paths: list[str]):
+    global vectordb
+
+    emb = get_embeddings()
+    split_docs = split_pdfs(pdf_paths)
+
+    if os.path.exists(DB_DIR) and os.listdir(DB_DIR):
+        print("📂 Loading existing Chroma database...")
+        vectordb = Chroma(
+            persist_directory=DB_DIR,
+            embedding_function=emb,
+        )
+    else:
+        print("📚 Creating new Chroma database...")
+        vectordb = Chroma.from_documents(
+            documents=split_docs,
+            embedding=emb,
+            persist_directory=DB_DIR,
+        )
+
+    return build_qa_chain_from_vectordb(vectordb)
+
+
+def add_pdf_to_knowledge_base(pdf_path: str):
+    """Add a newly uploaded PDF into Chroma and refresh the QA chain."""
+    global qa_chain, vectordb
+
+    emb = get_embeddings()
+    split_docs = split_pdfs([pdf_path])
+
+    if not split_docs:
+        raise ValueError("No text could be extracted from this PDF.")
+
+    if vectordb is None:
+        if os.path.exists(DB_DIR) and os.listdir(DB_DIR):
+            vectordb = Chroma(
+                persist_directory=DB_DIR,
+                embedding_function=emb,
+            )
+            vectordb.add_documents(split_docs)
+        else:
+            vectordb = Chroma.from_documents(
+                documents=split_docs,
+                embedding=emb,
+                persist_directory=DB_DIR,
+            )
+    else:
+        vectordb.add_documents(split_docs)
+
+    qa_chain = build_qa_chain_from_vectordb(vectordb)
+    return len(split_docs)
+
+
 @app.on_event("startup")
 async def startup_event():
     """
     بمجرد ما السيرفر يشتغل، بيقرا كل ملفات الـ PDF الموجودة في static_pdfs
-    ويبني قاعدة المعرفة مرة واحدة. مفيش رفع ملفات من اليوزر خالص.
+    ويبني قاعدة المعرفة مرة واحدة.
     """
     global qa_chain
     pdf_paths = glob.glob(os.path.join(STATIC_PDF_DIR, "*.pdf"))
 
     if not pdf_paths:
-        print(f"⚠️  لا يوجد ملفات PDF في مجلد {STATIC_PDF_DIR}/ - حط ملفاتك هناك وأعد تشغيل السيرفر.")
+        print(f"⚠️  لا يوجد ملفات PDF في مجلد {STATIC_PDF_DIR}/ - ارفع ملفات من الموقع أو حطها في المجلد.")
         return
 
     print(f"📚 جاري بناء قاعدة المعرفة من {len(pdf_paths)} ملف/ملفات...")
@@ -159,7 +204,7 @@ async def startup_event():
 async def chat(req: ChatRequest):
     if qa_chain is None:
         return ChatResponse(
-            reply="عذرًا، قاعدة المعرفة مش جاهزة دلوقتي. تأكد إن فيه ملفات PDF في مجلد static_pdfs وأعد تشغيل السيرفر."
+            reply="عذرًا، قاعدة المعرفة مش جاهزة دلوقتي. ارفع ملف PDF من صفحة الموقع أو ضع ملفات في مجلد static_pdfs."
         )
 
     session = sessions.setdefault(req.session_id, {"messages": []})
@@ -189,6 +234,52 @@ async def chat(req: ChatRequest):
     session["messages"].append({"role": "assistant", "content": answer})
 
     return ChatResponse(reply=answer)
+
+
+@app.get("/documents")
+async def list_documents():
+    files = sorted(Path(STATIC_PDF_DIR).glob("*.pdf"))
+    return {
+        "count": len(files),
+        "files": [
+            {
+                "name": f.name,
+                "size_kb": round(f.stat().st_size / 1024, 1),
+            }
+            for f in files
+        ],
+        "knowledge_base_ready": qa_chain is not None,
+    }
+
+
+@app.post("/upload")
+async def upload_document(file: UploadFile = File(...)):
+    filename = Path(file.filename or "").name
+
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+
+    dest = Path(STATIC_PDF_DIR) / filename
+
+    try:
+        with dest.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    finally:
+        await file.close()
+
+    try:
+        chunks = add_pdf_to_knowledge_base(str(dest))
+    except Exception as e:
+        if dest.exists():
+            dest.unlink()
+        raise HTTPException(status_code=500, detail=f"Failed to index PDF: {e}") from e
+
+    return {
+        "ok": True,
+        "filename": filename,
+        "chunks_indexed": chunks,
+        "message": f"Uploaded and indexed: {filename}",
+    }
 
 
 @app.get("/health")
