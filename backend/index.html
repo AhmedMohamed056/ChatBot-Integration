@@ -419,21 +419,21 @@
     <div class="brand"><span class="dot"></span> مركز المساعدة</div>
     <nav>
       <a href="#how">كيف يعمل</a>
-      <a href="#upload">رفع المستندات</a>
+      <a href="http://localhost:7000/admin/login" target="_blank" rel="noreferrer">Admin</a>
       <a href="#">تواصل معنا</a>
     </nav>
   </header>
 
   <section class="hero">
     <div>
-      <div class="eyebrow">دعم فوري مبني على مستنداتك</div>
-      <h1>اسأل، وهيرد عليك من <em>مستنداتك</em> مباشرة</h1>
+      <div class="eyebrow">دليل العمرة في المملكة العربية السعودية</div>
+      <h1>اسأل عن <em>العمرة</em> وهنوجهك بشكل واضح</h1>
       <p class="lede">
-        مساعد ذكي جاهز جنبك في أي صفحة، بيقرا في المستندات اللي انت حاططها وبيجاوب أسئلة عملائك منها بس، من غير ما يخترع إجابات.
+        مساعد ذكي يساعد الزوار والمصلين على معرفة خطوات العمرة، الترتيبات، الأماكن المهمة، والإجراءات في السعودية، من خلال إجابات موثوقة وسريعة من محتوى معتمد.
       </p>
       <div class="cta-row">
         <button class="btn btn-primary" onclick="openChat()">جرّب الشات دلوقتي</button>
-        <a href="#how" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center;">كيف يعمل؟</a>
+        <a href="#how" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center;">كيف تبدأ؟</a>
       </div>
     </div>
     <div class="doc-stack">
@@ -451,44 +451,22 @@
 
   <section class="section" id="how">
     <h2>كيف يعمل المساعد</h2>
-    <p class="sub">ثلاث خطوات بسيطة، من غير ما تلمس كود.</p>
+    <p class="sub">ثلاث خطوات بسيطة لتلبية أسئلة العمرة في السعودية.</p>
     <div class="steps">
       <div class="step">
         <div class="num">01</div>
-        <h3>ارفع مستنداتك</h3>
-        <p>ارفع ملفات الـ PDF من الموقع، والمساعد بيضيفها لقاعدة المعرفة عشان يجاوب منها.</p>
+        <h3>ارفع محتوى موثوق</h3>
+        <p>ارفع ملفات PDF أو مستندات تتعلق بالإجراءات والعبادات الخاصة بالعمرة، ليتم بناء قاعدة معرفية للرد عليها.</p>
       </div>
       <div class="step">
         <div class="num">02</div>
-        <h3>بيسأل، وبيدور في المحتوى</h3>
-        <p>لما حد يسأل سؤال، المساعد بيدور جوه المستندات على أقرب إجابة دقيقة.</p>
+        <h3>اسأل عن العمرة</h3>
+        <p>عندما يطلب الزائر معرفة خطط الزيارة، أو أوقات التقديم، أو الخطوات الأساسية، يراجع المساعد المحتوى المعتمد ويستخرج الإجابة.</p>
       </div>
       <div class="step">
         <div class="num">03</div>
         <h3>رد واضح ومباشر</h3>
-        <p>لو الإجابة مش موجودة في المستندات، بيقولك بكل شفافية بدل ما يخمّن.</p>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="upload">
-    <h2>رفع مستندات للبوت</h2>
-    <p class="sub">ارفع ملفات PDF وهيتعمل لها فهرسة فورًا، وبعدها الشات والواتساب هيجاوبوا منها.</p>
-    <div class="upload-box">
-      <div>
-        <label class="upload-drop" id="upload-drop" for="pdf-input">
-          <h3>اسحب الملف هنا أو اضغط للاختيار</h3>
-          <p>يدعم ملفات PDF فقط. بعد الرفع، البوت يقدر يرد على الأسئلة من محتوى الملف.</p>
-          <span class="btn btn-primary" style="display:inline-block;">اختيار ملف PDF</span>
-          <input type="file" id="pdf-input" accept=".pdf,application/pdf" />
-        </label>
-        <div class="upload-status" id="upload-status"></div>
-      </div>
-      <div>
-        <h3 style="margin:0 0 14px; font-family:'Cairo',sans-serif; font-size:16px;">الملفات الحالية</h3>
-        <ul class="file-list" id="file-list">
-          <li class="file-list-empty">جاري تحميل قائمة الملفات...</li>
-        </ul>
+        <p>في حال غاب الجواب في المستندات، يوضح المساعد ذلك بوضوح بدل الإفتراض أو الخلط بين المعلومات.</p>
       </div>
     </div>
   </section>
@@ -508,7 +486,7 @@
     <div class="chat-header">
       <div class="chat-avatar">AI</div>
       <div>
-        <div class="chat-title">مساعد الدعم</div>
+        <div class="chat-title">مساعد العمرة</div>
         <div class="chat-status"><span class="live-dot"></span> متصل الآن</div>
       </div>
     </div>
@@ -546,7 +524,7 @@
       panel.classList.add("open");
       fab.classList.add("open");
       if(!welcomed){
-        addMessage("أهلاً بيك! أنا مساعد الدعم، اسألني أي سؤال عن مستنداتنا وهرد عليك دلوقتي.", "bot");
+        addMessage("أهلاً بك! أنا مساعد العمرة في السعودية، اسأل عن الإجراءات، الخطوات، أو التوجيهات المتعلقة بالعمرة وسأعطيك إجابة واضحة.", "bot");
         welcomed = true;
       }
       document.getElementById("msg-input").focus();
@@ -598,87 +576,6 @@
       if (e.key === "Enter") sendMessage();
     });
 
-    // ---------- Document upload ----------
-    const pdfInput = document.getElementById("pdf-input");
-    const uploadDrop = document.getElementById("upload-drop");
-    const uploadStatus = document.getElementById("upload-status");
-    const fileList = document.getElementById("file-list");
-
-    async function refreshDocuments(){
-      try {
-        const res = await fetch(`${API_URL}/documents`);
-        const data = await res.json();
-
-        if (!data.files || data.files.length === 0) {
-          fileList.innerHTML = '<li class="file-list-empty">مفيش ملفات لسه. ارفع أول PDF من هنا.</li>';
-          return;
-        }
-
-        fileList.innerHTML = data.files.map((f) => (
-          `<li><span>${f.name}</span><span class="meta">${f.size_kb} KB</span></li>`
-        )).join("");
-      } catch (err) {
-        fileList.innerHTML = '<li class="file-list-empty">مش قادر أعرض الملفات. تأكد إن الـ backend شغال.</li>';
-      }
-    }
-
-    async function uploadPdf(file){
-      if (!file) return;
-
-      if (!file.name.toLowerCase().endsWith(".pdf")) {
-        uploadStatus.className = "upload-status err";
-        uploadStatus.textContent = "الملف لازم يكون PDF.";
-        return;
-      }
-
-      uploadStatus.className = "upload-status";
-      uploadStatus.textContent = `جاري رفع وفهرسة: ${file.name} ...`;
-
-      const form = new FormData();
-      form.append("file", file);
-
-      try {
-        const res = await fetch(`${API_URL}/upload`, {
-          method: "POST",
-          body: form,
-        });
-        const data = await res.json();
-
-        if (!res.ok) {
-          throw new Error(data.detail || "Upload failed");
-        }
-
-        uploadStatus.className = "upload-status ok";
-        uploadStatus.textContent = `تم! ${data.filename} اتضاف (${data.chunks_indexed} جزء). تقدر تسأل الشات عنه دلوقتي.`;
-        pdfInput.value = "";
-        await refreshDocuments();
-      } catch (err) {
-        uploadStatus.className = "upload-status err";
-        uploadStatus.textContent = "فشل الرفع. تأكد إن الـ backend شغال وأن الملف PDF صالح.";
-      }
-    }
-
-    pdfInput.addEventListener("change", () => {
-      uploadPdf(pdfInput.files[0]);
-    });
-
-    uploadDrop.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      uploadDrop.classList.add("dragover");
-    });
-
-    uploadDrop.addEventListener("dragleave", () => {
-      uploadDrop.classList.remove("dragover");
-    });
-
-    uploadDrop.addEventListener("drop", (e) => {
-      e.preventDefault();
-      uploadDrop.classList.remove("dragover");
-      const file = e.dataTransfer.files[0];
-      uploadPdf(file);
-    });
-
-    refreshDocuments();
   </script>
 
 </body>
