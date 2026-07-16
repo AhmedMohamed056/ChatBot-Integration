@@ -9,6 +9,35 @@ const {
   shouldRespondToMessage,
 } = require('../middleware/mentionFilter');
 
+function parseLearnCommand(body) {
+  const trimmed = typeof body === 'string' ? body.trim() : '';
+
+  if (!trimmed.toLowerCase().startsWith('!learn')) {
+    return null;
+  }
+
+  const payload = trimmed.replace(/^!learn\b/i, '').trim();
+
+  if (!payload) {
+    return null;
+  }
+
+  const separatorMatch = payload.match(/^(.*?)(?:\s*\|\s*|\s*=>\s*)(.*)$/s);
+
+  if (!separatorMatch) {
+    return null;
+  }
+
+  const question = separatorMatch[1].trim();
+  const answer = separatorMatch[2].trim();
+
+  if (!question || !answer) {
+    return null;
+  }
+
+  return { question, answer };
+}
+
 async function handleIncomingMessage(message, client) {
   try {
     if (config.IGNORE_SELF && message?.fromMe) {
@@ -38,6 +67,26 @@ async function handleIncomingMessage(message, client) {
     });
 
     if (!shouldRespond) {
+      return;
+    }
+
+    const rawBody = typeof message?.body === 'string' ? message.body.trim() : '';
+    const learnCommand = parseLearnCommand(rawBody);
+
+    if (learnCommand) {
+      const response = await ragClient.post('/learn', {
+        question: learnCommand.question,
+        answer: learnCommand.answer,
+        source: 'whatsapp_admin',
+      });
+
+      const reply = response?.data?.message || 'Knowledge saved successfully.';
+      await message.reply(reply);
+      logger.info('WhatsApp knowledge saved.', {
+        groupId: message.from,
+        author: message.author || message.from,
+        question: learnCommand.question,
+      });
       return;
     }
 

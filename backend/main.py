@@ -18,6 +18,7 @@ from langchain_classic.chains import create_history_aware_retriever, create_retr
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.documents import Document
 
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -53,6 +54,12 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+
+
+class LearnRequest(BaseModel):
+    question: str
+    answer: str
+    source: str = "whatsapp_admin"
 
 
 def get_embeddings():
@@ -129,6 +136,30 @@ Context:
     return create_retrieval_chain(history_aware_retriever, question_answer_chain)
 
 
+def ensure_vectordb():
+    global vectordb
+
+    if vectordb is not None:
+        return vectordb
+
+    emb = get_embeddings()
+
+    if os.path.exists(DB_DIR) and os.listdir(DB_DIR):
+        print("📂 Loading existing Chroma database...")
+        vectordb = Chroma(
+            persist_directory=DB_DIR,
+            embedding_function=emb,
+        )
+    else:
+        print("📚 Creating new Chroma database...")
+        vectordb = Chroma(
+            embedding_function=emb,
+            persist_directory=DB_DIR,
+        )
+
+    return vectordb
+
+
 def build_rag_chain(pdf_paths: list[str]):
     global vectordb
 
@@ -150,6 +181,30 @@ def build_rag_chain(pdf_paths: list[str]):
         )
 
     return build_qa_chain_from_vectordb(vectordb)
+
+
+def add_text_to_knowledge_base(question: str, answer: str, source: str = "whatsapp_admin"):
+    global qa_chain
+
+    db = ensure_vectordb()
+    question = question.strip()
+    answer = answer.strip()
+
+    if not question or not answer:
+        raise ValueError("Question and answer are required.")
+
+    learn_doc = Document(
+        page_content=f"Question: {question}\nAnswer: {answer}",
+        metadata={
+            "source": source,
+            "type": "whatsapp_admin",
+            "question": question,
+        },
+    )
+
+    db.add_documents([learn_doc])
+    qa_chain = build_qa_chain_from_vectordb(db)
+    return 1
 
 
 def add_pdf_to_knowledge_base(pdf_path: str):
@@ -279,6 +334,23 @@ async def upload_document(file: UploadFile = File(...)):
         "filename": filename,
         "chunks_indexed": chunks,
         "message": f"Uploaded and indexed: {filename}",
+    }
+
+
+@app.post("/learn")
+async def learn_from_whatsapp(req: LearnRequest):
+    if not req.question.strip() or not req.answer.strip():
+        raise HTTPException(status_code=400, detail="Question and answer are required.")
+
+    try:
+        chunks = add_text_to_knowledge_base(req.question, req.answer, source=req.source)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add knowledge: {e}") from e
+
+    return {
+        "ok": True,
+        "chunks_indexed": chunks,
+        "message": "Knowledge added to the bot's retrieval index.",
     }
 
 
