@@ -14,6 +14,11 @@ WhatsApp integration that replies in groups when the bot is mentioned.
 
 ### 1. Start the backend
 
+```webpage
+cd backend
+python -m http.server 5500
+```
+
 ```bash
 cd backend
 uvicorn main:app --reload
