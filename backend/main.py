@@ -1,5 +1,4 @@
 import os
-import glob
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -11,8 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -22,19 +19,46 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.documents import Document
 
+from campaign_service import build_active_campaign_context, process_campaign_update
+from database import (
+    add_visitor_question,
+    create_campaign,
+    delete_campaign,
+    delete_uploaded_file_record,
+    get_all_settings,
+    get_campaign_activity_report,
+    get_dashboard_stats,
+    get_top_visitor_questions,
+    get_unanswered_questions,
+    init_db,
+    list_campaigns,
+    list_uploaded_files_db,
+    set_setting,
+    update_campaign,
+    upsert_uploaded_file,
+)
+from date_utils import format_datetime_context_block
+from document_service import (
+    SUPPORTED_UPLOAD_EXTENSIONS,
+    get_supported_document_type,
+    list_supported_files,
+    rebuild_vectordb,
+    split_file,
+)
+
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_SESSION_COOKIE = "admin_session"
-ASSISTANT_NAME = "معين الزائرين"
 
 # ---- إعدادات المستندات ----
 STATIC_PDF_DIR = "static_pdfs"
 DB_DIR = "chroma_db"
+CALENDAR_DIR = "calendar_files"
 BACKEND_DIR = Path(__file__).resolve().parent
-SUPPORTED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".txt"}
 os.makedirs(STATIC_PDF_DIR, exist_ok=True)
+os.makedirs(CALENDAR_DIR, exist_ok=True)
 
 app = FastAPI()
 
@@ -58,6 +82,7 @@ vectordb = None
 class ChatRequest(BaseModel):
     message: str
     session_id: str
+    source: str = "website"
 
 
 class ChatResponse(BaseModel):
@@ -70,30 +95,40 @@ class LearnRequest(BaseModel):
     source: str = "whatsapp_admin"
 
 
-def get_supported_document_type(filename: str) -> str:
-    suffix = Path(filename).suffix.lower()
-    return suffix.lstrip(".").upper() if suffix in SUPPORTED_UPLOAD_EXTENSIONS else "UNKNOWN"
+class CampaignRequest(BaseModel):
+    name: str
+    whatsapp_number: str
+    status: str = "active"
 
 
-def get_document_status(filename: str) -> str:
-    suffix = Path(filename).suffix.lower()
-    if suffix == ".pdf":
-        return "indexed"
-    return "stored-ready-for-rag"
+class CampaignUpdateRequest(BaseModel):
+    phone: str
+    message: str
+
+
+class SettingsUpdateRequest(BaseModel):
+    assistant_name: str | None = None
+    system_prompt: str | None = None
+    campaign_list_file: str | None = None
 
 
 def list_supported_documents() -> list[dict]:
+    db_files = {item["filename"]: item for item in list_uploaded_files_db()}
     files = []
-    for path in sorted(Path(STATIC_PDF_DIR).glob("*")):
-        if path.suffix.lower() not in SUPPORTED_UPLOAD_EXTENSIONS:
-            continue
+
+    for path in list_supported_files():
+        db_row = db_files.get(path.name)
+        uploaded_at = db_row["uploaded_at"] if db_row else datetime.fromtimestamp(
+            path.stat().st_mtime
+        ).isoformat(timespec="seconds")
+        size_bytes = db_row["size_bytes"] if db_row else path.stat().st_size
 
         files.append({
             "filename": path.name,
             "type": get_supported_document_type(path.name),
-            "status": get_document_status(path.name),
-            "uploaded_at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
-            "size_kb": round(path.stat().st_size / 1024, 1),
+            "status": "indexed",
+            "uploaded_at": uploaded_at,
+            "size_kb": round(size_bytes / 1024, 1),
         })
 
     return files
@@ -106,14 +141,14 @@ def get_embeddings():
     return embeddings
 
 
-def split_pdfs(pdf_paths: list[str]):
-    documents = []
-    for path in pdf_paths:
-        loader = PyMuPDFLoader(path)
-        documents.extend(loader.load())
+def get_assistant_name() -> str:
+    settings = get_all_settings()
+    return settings.get("assistant_name") or "معين الزائرين"
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-    return text_splitter.split_documents(documents)
+
+def get_custom_system_prompt() -> str:
+    settings = get_all_settings()
+    return settings.get("system_prompt") or ""
 
 
 def build_qa_chain_from_vectordb(db):
@@ -143,8 +178,13 @@ def build_qa_chain_from_vectordb(db):
         llm, retriever, contextualize_q_prompt
     )
 
+    assistant_name = get_assistant_name()
+    custom_prompt = get_custom_system_prompt()
+
     system_prompt = f"""
-أنت {ASSISTANT_NAME}.
+أنت {assistant_name}.
+
+{custom_prompt}
 
 رسالتك: تشجيع وتسهيل وإرشاد الزائر للنبي محمد صلى الله عليه وآله وسلم وابنته السيدة فاطمة الزهراء عليها السلام وأئمة البقيع عليهم السلام، وكل ما يتعلق بالمدينة المنورة ومكة المكرمة، بما يساعد الزائر على أداء زيارته بسهولة وطمأنينة.
 
@@ -208,27 +248,13 @@ def ensure_vectordb():
     return vectordb
 
 
-def build_rag_chain(pdf_paths: list[str]):
-    global vectordb
+def refresh_qa_chain():
+    global qa_chain, vectordb
 
     emb = get_embeddings()
-    split_docs = split_pdfs(pdf_paths)
-
-    if os.path.exists(DB_DIR) and os.listdir(DB_DIR):
-        print("📂 Loading existing Chroma database...")
-        vectordb = Chroma(
-            persist_directory=DB_DIR,
-            embedding_function=emb,
-        )
-    else:
-        print("📚 Creating new Chroma database...")
-        vectordb = Chroma.from_documents(
-            documents=split_docs,
-            embedding=emb,
-            persist_directory=DB_DIR,
-        )
-
-    return build_qa_chain_from_vectordb(vectordb)
+    vectordb = rebuild_vectordb(emb, DB_DIR)
+    qa_chain = build_qa_chain_from_vectordb(vectordb)
+    return qa_chain
 
 
 def add_text_to_knowledge_base(question: str, answer: str, source: str = "whatsapp_admin"):
@@ -255,16 +281,15 @@ def add_text_to_knowledge_base(question: str, answer: str, source: str = "whatsa
     return 1
 
 
-def add_pdf_to_knowledge_base(pdf_path: str):
-    """Add a newly uploaded PDF into Chroma and refresh the QA chain."""
+def add_document_to_knowledge_base(file_path: str):
+    """Add a newly uploaded document into Chroma and refresh the QA chain."""
     global qa_chain, vectordb
 
-    emb = get_embeddings()
-    split_docs = split_pdfs([pdf_path])
-
+    split_docs = split_file(file_path)
     if not split_docs:
-        raise ValueError("No text could be extracted from this PDF.")
+        raise ValueError("No text could be extracted from this file.")
 
+    emb = get_embeddings()
     if vectordb is None:
         if os.path.exists(DB_DIR) and os.listdir(DB_DIR):
             vectordb = Chroma(
@@ -283,6 +308,12 @@ def add_pdf_to_knowledge_base(pdf_path: str):
 
     qa_chain = build_qa_chain_from_vectordb(vectordb)
     return len(split_docs)
+
+
+def rebuild_knowledge_base():
+    global qa_chain, vectordb
+    qa_chain = refresh_qa_chain()
+    return qa_chain is not None
 
 
 def is_admin_authenticated(request: Request) -> bool:
@@ -394,461 +425,8 @@ def render_admin_login_page() -> HTMLResponse:
 
 
 def render_admin_dashboard() -> HTMLResponse:
-    return HTMLResponse("""
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Admin Dashboard</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <style>
-    :root{
-      --ink: #0E2B2C;
-      --panel: #133B3B;
-      --panel-2: #16474A;
-      --gold: #E3A857;
-      --gold-soft: #F0C685;
-      --sand: #F4EFE6;
-      --sage: #9FB8B3;
-      --line: rgba(244,239,230,0.10);
-      --radius: 18px;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: radial-gradient(1100px 600px at 85% -10%, rgba(227,168,87,0.18), transparent 60%), radial-gradient(900px 500px at -10% 110%, rgba(227,168,87,0.10), transparent 60%), var(--ink);
-      color: var(--sand);
-      font-family: 'Tajawal', sans-serif;
-      padding: 20px;
-    }
-    h1, h2, h3, .brand { font-family: 'Cairo', sans-serif; }
-    .admin-shell {
-      display: grid;
-      grid-template-columns: 240px minmax(0, 1fr);
-      gap: 20px;
-      min-height: calc(100vh - 40px);
-    }
-    .sidebar {
-      background: linear-gradient(155deg, var(--panel-2), var(--panel));
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 18px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .brand {
-      font-size: 20px;
-      margin-bottom: 10px;
-      color: var(--sand);
-    }
-    .nav-item {
-      border: 1px solid var(--line);
-      background: rgba(244,239,230,0.03);
-      border-radius: 12px;
-      padding: 12px 14px;
-      color: var(--sand);
-      cursor: pointer;
-      font-weight: 700;
-    }
-    .nav-item.active {
-      background: rgba(227,168,87,0.12);
-      border-color: rgba(227,168,87,0.42);
-      color: var(--gold-soft);
-    }
-    .main-panel {
-      background: rgba(244,239,230,0.02);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 24px;
-    }
-    .page-title {
-      font-size: 28px;
-      margin: 0 0 8px;
-    }
-    .subtext {
-      color: var(--sage);
-      margin: 0 0 24px;
-      line-height: 1.8;
-    }
-    .stats-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 18px;
-      margin-bottom: 22px;
-    }
-    .card {
-      background: linear-gradient(155deg, var(--panel-2), var(--panel));
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 20px;
-    }
-    .label {
-      color: var(--sage);
-      font-size: 14px;
-      margin-bottom: 10px;
-    }
-    .value {
-      font-size: 28px;
-      font-family: 'Cairo', sans-serif;
-      color: var(--gold-soft);
-      margin-bottom: 6px;
-    }
-    .muted {
-      color: var(--sage);
-      font-size: 13px;
-    }
-    .charts-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 18px;
-      margin-bottom: 18px;
-    }
-    .bar-list {
-      display: flex;
-      align-items: end;
-      gap: 12px;
-      height: 210px;
-      margin-top: 14px;
-    }
-    .bar-col {
-      flex: 1;
-      text-align: center;
-    }
-    .bar-body {
-      display: flex;
-      align-items: end;
-      justify-content: center;
-      height: 180px;
-    }
-    .bar-rail {
-      width: 22px;
-      border-radius: 999px;
-      background: linear-gradient(180deg, var(--gold-soft), var(--gold));
-      box-shadow: 0 8px 20px rgba(227,168,87,0.2);
-    }
-    .bar-label {
-      margin-top: 8px;
-      color: var(--sage);
-      font-size: 12px;
-    }
-    .faq-list {
-      list-style: none;
-      margin: 6px 0 0;
-      padding: 0;
-      display: grid;
-      gap: 10px;
-    }
-    .faq-item {
-      display: flex;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 10px 12px;
-      background: rgba(244,239,230,0.05);
-      border-radius: 10px;
-      border: 1px solid var(--line);
-      color: var(--sand);
-      font-size: 14px;
-    }
-    .faq-count {
-      color: var(--gold-soft);
-      font-weight: 700;
-    }
-    .upload-box {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 18px;
-      margin-top: 12px;
-      align-items: start;
-    }
-    .drop-zone {
-      border: 1.5px dashed rgba(227,168,87,0.45);
-      border-radius: 16px;
-      padding: 24px;
-      background: rgba(227,168,87,0.05);
-      text-align: center;
-    }
-    .btn {
-      padding: 12px 20px;
-      border-radius: 999px;
-      border: none;
-      cursor: pointer;
-      background: var(--gold);
-      color: #1a1206;
-      font-weight: 700;
-      font-family: 'Tajawal', sans-serif;
-      text-decoration: none;
-      display: inline-block;
-      margin-top: 12px;
-    }
-    .btn.secondary {
-      background: transparent;
-      color: var(--sand);
-      border: 1px solid var(--line);
-    }
-    @media (max-width: 900px) {
-      .admin-shell { grid-template-columns: 1fr; }
-      .upload-box { grid-template-columns: 1fr; }
-    }
-  </style>
-</head>
-<body>
-  <div id="admin-root"></div>
-  <script>
-    const { useState } = React;
-
-    const stats = [
-      { label: 'إجمالي المحادثات', value: '1,248', hint: '+12% هذا الأسبوع' },
-      { label: 'الأسئلة المجابة', value: '934', hint: 'نسبة الإجابة 75%' },
-      { label: 'الملفات المرفوعة', value: '18', hint: 'منها 6 ملفات جديدة' },
-      { label: 'متوسط زمن الرد', value: '2.4s', hint: 'أقل من 3 ثوانٍ' },
-    ];
-
-    const faqData = [
-      { question: 'ما هي خطوات العمرة؟', count: 184 },
-      { question: 'هل يتطلب الحصول على تأشيرة؟', count: 146 },
-      { question: 'ما الأماكن المهمة في مكة؟', count: 132 },
-      { question: 'كيف أجد مواعيد الدخول؟', count: 127 },
-    ];
-
-    const chartData = [
-      { label: 'Mon', value: 44 },
-      { label: 'Tue', value: 65 },
-      { label: 'Wed', value: 58 },
-      { label: 'Thu', value: 73 },
-      { label: 'Fri', value: 82 },
-      { label: 'Sat', value: 71 },
-      { label: 'Sun', value: 88 },
-    ];
-
-    function Sidebar({ active, onSelect }) {
-      return React.createElement('aside', { className: 'sidebar' },
-        React.createElement('div', { className: 'brand' }, 'لوحة الإدارة'),
-        React.createElement('button', {
-          className: `nav-item ${active === 'dashboard' ? 'active' : ''}`,
-          onClick: () => onSelect('dashboard')
-        }, 'Dashboard'),
-        React.createElement('button', {
-          className: `nav-item ${active === 'upload' ? 'active' : ''}`,
-          onClick: () => onSelect('upload')
-        }, 'Upload Files'),
-        React.createElement('div', { style: { marginTop: 'auto' } },
-          React.createElement('a', { className: 'btn secondary', href: '/admin/logout', style: { textDecoration: 'none' } }, 'تسجيل الخروج')
-        )
-      );
-    }
-
-    function StatCard({ label, value, hint }) {
-      return React.createElement('div', { className: 'card' },
-        React.createElement('div', { className: 'label' }, label),
-        React.createElement('div', { className: 'value' }, value),
-        React.createElement('div', { className: 'muted' }, hint)
-      );
-    }
-
-    function BarChart({ data }) {
-      const max = Math.max(...data.map(item => item.value));
-      return React.createElement('div', { className: 'card' },
-        React.createElement('div', { className: 'label' }, 'إحصائيات التفاعل الأسبوعية'),
-        React.createElement('div', { className: 'bar-list' }, data.map((item) =>
-          React.createElement('div', { className: 'bar-col', key: item.label },
-            React.createElement('div', { className: 'bar-body' },
-              React.createElement('div', {
-                className: 'bar-rail',
-                style: { height: `${(item.value / max) * 100}%` }
-              })
-            ),
-            React.createElement('div', { className: 'bar-label' }, item.label)
-          )
-        ))
-      );
-    }
-
-    function FAQPanel({ items }) {
-      return React.createElement('div', { className: 'card' },
-        React.createElement('div', { className: 'label' }, 'Most frequently asked questions'),
-        React.createElement('ul', { className: 'faq-list' }, items.map((item) =>
-          React.createElement('li', { className: 'faq-item', key: item.question },
-            React.createElement('span', null, item.question),
-            React.createElement('span', { className: 'faq-count' }, item.count)
-          )
-        ))
-      );
-    }
-
-    function UploadPanel() {
-      const [files, setFiles] = useState([]);
-      const [dragActive, setDragActive] = useState(false);
-      const [selectedFile, setSelectedFile] = useState(null);
-      const [uploadMessage, setUploadMessage] = useState('');
-
-      function loadFiles() {
-        fetch('/admin/files')
-          .then((res) => res.json())
-          .then((data) => setFiles(data.files || []))
-          .catch(() => setFiles([]));
-      }
-
-      React.useEffect(() => { loadFiles(); }, []);
-
-      async function uploadFile(fileToUpload, replaceFilename = null) {
-        if (!fileToUpload) return;
-
-        const form = new FormData();
-        form.append('file', fileToUpload);
-
-        const url = replaceFilename ? `/admin/files/${encodeURIComponent(replaceFilename)}/replace` : '/upload';
-        const method = replaceFilename ? 'POST' : 'POST';
-
-        try {
-          const res = await fetch(url, { method, body: form });
-          const data = await res.json();
-          setUploadMessage(data.message || 'Uploaded successfully');
-          loadFiles();
-        } catch (err) {
-          setUploadMessage('Upload failed. Please try again.');
-        }
-      }
-
-      async function deleteFile(filename) {
-        try {
-          const res = await fetch(`/admin/files/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-          const data = await res.json();
-          setUploadMessage(data.message || 'Deleted successfully');
-          loadFiles();
-        } catch (err) {
-          setUploadMessage('Delete failed.');
-        }
-      }
-
-      function onDrop(e) {
-        e.preventDefault();
-        setDragActive(false);
-        const file = e.dataTransfer.files?.[0];
-        if (file) uploadFile(file);
-      }
-
-      return React.createElement('div', { className: 'card' },
-        React.createElement('div', { className: 'label' }, 'Upload Files'),
-        React.createElement('div', { className: 'upload-box' },
-          React.createElement('div', {
-            className: 'drop-zone',
-            onDragOver: (e) => { e.preventDefault(); setDragActive(true); },
-            onDragLeave: () => setDragActive(false),
-            onDrop
-          },
-            React.createElement('h3', { style: { margin: '0 0 10px', fontSize: '18px' } }, 'اسحب الملف هنا أو اضغط للاختيار'),
-            React.createElement('p', { style: { color: 'var(--sage)', margin: 0 } }, 'يدعم ملفات PDF و DOCX و TXT. بعد الرفع، سيتم تجهيز الملف للذكاء المعزز لاحقًا.'),
-            React.createElement('label', { className: 'btn', htmlFor: 'upload-input' }, 'اختيار ملف'),
-            React.createElement('input', {
-              id: 'upload-input',
-              type: 'file',
-              accept: '.pdf,.docx,.txt',
-              style: { display: 'none' },
-              onChange: (e) => uploadFile(e.target.files?.[0])
-            }),
-            React.createElement('div', { style: { color: 'var(--gold-soft)', marginTop: '12px' } }, uploadMessage || 'جاهز للرفع')
-          ),
-          React.createElement('div', { className: 'card', style: { background: 'rgba(244,239,230,0.03)' } },
-            React.createElement('div', { className: 'label' }, 'Uploaded files'),
-            React.createElement('table', {
-              style: {
-                width: '100%',
-                borderCollapse: 'collapse',
-                color: 'var(--sand)',
-                fontSize: '13px'
-              }
-            },
-              React.createElement('thead', null,
-                React.createElement('tr', null,
-                  React.createElement('th', { style: { textAlign: 'right', padding: '8px 0', color: 'var(--sage)' } }, 'Name'),
-                  React.createElement('th', { style: { textAlign: 'right', padding: '8px 0', color: 'var(--sage)' } }, 'Status'),
-                  React.createElement('th', { style: { textAlign: 'right', padding: '8px 0', color: 'var(--sage)' } }, 'Upload date'),
-                  React.createElement('th', { style: { textAlign: 'right', padding: '8px 0', color: 'var(--sage)' } }, 'Actions')
-                )
-              ),
-              React.createElement('tbody', null,
-                files.length === 0
-                  ? React.createElement('tr', null,
-                      React.createElement('td', { colSpan: 4, style: { padding: '12px 0', color: 'var(--sage)' } }, 'No files uploaded yet.')
-                    )
-                  : files.map((item) =>
-                      React.createElement('tr', { key: item.filename },
-                        React.createElement('td', { style: { padding: '10px 0', borderBottom: '1px solid var(--line)' } }, item.filename),
-                        React.createElement('td', { style: { padding: '10px 0', borderBottom: '1px solid var(--line)' } }, item.status),
-                        React.createElement('td', { style: { padding: '10px 0', borderBottom: '1px solid var(--line)' } }, item.uploaded_at),
-                        React.createElement('td', { style: { padding: '10px 0', borderBottom: '1px solid var(--line)' } },
-                          React.createElement('button', {
-                            className: 'btn secondary',
-                            style: { marginTop: 0, marginLeft: '8px', padding: '8px 12px', fontSize: '12px' },
-                            onClick: () => deleteFile(item.filename)
-                          }, 'Delete'),
-                          React.createElement('label', {
-                            className: 'btn secondary',
-                            style: { marginTop: 0, padding: '8px 12px', fontSize: '12px', cursor: 'pointer' },
-                            htmlFor: `replace-${item.filename}`
-                          }, 'Replace'),
-                          React.createElement('input', {
-                            id: `replace-${item.filename}`,
-                            type: 'file',
-                            accept: '.pdf,.docx,.txt',
-                            style: { display: 'none' },
-                            onChange: (e) => {
-                              const file = e.target.files?.[0];
-                              if (file) uploadFile(file, item.filename);
-                            }
-                          })
-                        )
-                      )
-                    )
-              )
-            )
-          )
-        )
-      );
-    }
-
-    function DashboardView() {
-      return React.createElement('div', null,
-        React.createElement('h1', { className: 'page-title' }, 'لوحة الإدارة'),
-        React.createElement('p', { className: 'subtext' }, 'مرحبًا بك في لوحة تحكم المساعد الرقمي الخاص بالعمرة في السعودية.'),
-        React.createElement('div', { className: 'stats-grid' }, stats.map((item) =>
-          React.createElement(StatCard, { key: item.label, ...item })
-        )),
-        React.createElement('div', { className: 'charts-grid' },
-          React.createElement(BarChart, { data: chartData }),
-          React.createElement(FAQPanel, { items: faqData })
-        )
-      );
-    }
-
-    function AdminApp() {
-      const [activeView, setActiveView] = useState('dashboard');
-
-      return React.createElement('div', { className: 'admin-shell' },
-        React.createElement(Sidebar, { active: activeView, onSelect: setActiveView }),
-        React.createElement('main', { className: 'main-panel' },
-          activeView === 'dashboard'
-            ? React.createElement(DashboardView)
-            : React.createElement('div', null,
-                React.createElement('h1', { className: 'page-title' }, 'Upload Files'),
-                React.createElement('p', { className: 'subtext' }, 'استخدم هذه المنطقة لإضافة الملفات الجديدة إلى قاعدة المعرفة الخاصة بالمساعد.'),
-                React.createElement(UploadPanel)
-              )
-        )
-      );
-    }
-
-    ReactDOM.createRoot(document.getElementById('admin-root')).render(React.createElement(AdminApp));
-  </script>
-</body>
-</html>
-""")
+    dashboard_path = BACKEND_DIR / "admin_dashboard.html"
+    return HTMLResponse(dashboard_path.read_text(encoding="utf-8"))
 
 
 @app.get("/")
@@ -904,25 +482,54 @@ async def admin_logout():
 
 @app.on_event("startup")
 async def startup_event():
-    """
-    بمجرد ما السيرفر يشتغل، بيقرا كل ملفات الـ PDF الموجودة في static_pdfs
-    ويبني قاعدة المعرفة مرة واحدة.
-    """
+    """Initialize SQLite and build the knowledge base from uploaded files."""
     global qa_chain
-    pdf_paths = glob.glob(os.path.join(STATIC_PDF_DIR, "*.pdf"))
 
-    if not pdf_paths:
-        print(f"⚠️  لا يوجد ملفات PDF في مجلد {STATIC_PDF_DIR}/ - ارفع ملفات من الموقع أو حطها في المجلد.")
+    init_db()
+    supported_files = list_supported_files()
+
+    if not supported_files:
+        print(f"⚠️  No supported files in {STATIC_PDF_DIR}/ yet.")
         return
 
-    print(f"📚 جاري بناء قاعدة المعرفة من {len(pdf_paths)} ملف/ملفات...")
-    qa_chain = build_rag_chain(pdf_paths)
-    print("✅ قاعدة المعرفة جاهزة.")
+    print(f"📚 Building knowledge base from {len(supported_files)} file(s)...")
+    for file_path in supported_files:
+        upsert_uploaded_file(
+            filename=file_path.name,
+            file_type=get_supported_document_type(file_path.name),
+            size_bytes=file_path.stat().st_size,
+            file_path=str(file_path),
+            uploaded_at=datetime.fromtimestamp(file_path.stat().st_mtime).isoformat(timespec="seconds"),
+        )
+    qa_chain = refresh_qa_chain()
+    print("✅ Knowledge base ready.")
+
+
+def build_enriched_question(message: str) -> str:
+    campaign_context = build_active_campaign_context()
+    datetime_context = format_datetime_context_block()
+    return (
+        f"{datetime_context}\n\n"
+        f"Active Campaign Information (not part of RAG, use only if relevant and not expired):\n"
+        f"{campaign_context}\n\n"
+        f"Visitor Question:\n{message}"
+    )
+
+
+def looks_like_successful_answer(answer: str) -> bool:
+    failure_markers = [
+        "لم أجد معلومات موثقة",
+        "لا أستطيع تقديم إجابة مؤكدة",
+        "عذرًا، قاعدة المعرفة",
+        "Sorry, the AI service is currently overloaded",
+    ]
+    return not any(marker in answer for marker in failure_markers)
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     if qa_chain is None:
+        add_visitor_question(req.message, answered=False, session_id=req.session_id, source=req.source)
         return ChatResponse(
             reply="عذرًا، قاعدة المعرفة مش جاهزة دلوقتي. ارفع ملف PDF من صفحة الموقع أو ضع ملفات في مجلد static_pdfs."
         )
@@ -936,9 +543,11 @@ async def chat(req: ChatRequest):
         else:
             chat_history.append(AIMessage(content=msg["content"]))
 
+    enriched_input = build_enriched_question(req.message)
+
     try:
         response = qa_chain.invoke({
-            "input": req.message,
+            "input": enriched_input,
             "chat_history": chat_history,
         })
         answer = response["answer"]
@@ -950,6 +559,13 @@ async def chat(req: ChatRequest):
             "Sorry, the AI service is currently overloaded on Google's side. Please try again shortly."
         )
 
+    add_visitor_question(
+        req.message,
+        answered=looks_like_successful_answer(answer),
+        session_id=req.session_id,
+        source=req.source,
+    )
+
     session["messages"].append({"role": "user", "content": req.message})
     session["messages"].append({"role": "assistant", "content": answer})
 
@@ -958,7 +574,7 @@ async def chat(req: ChatRequest):
 
 @app.get("/documents")
 async def list_documents():
-    files = sorted(Path(STATIC_PDF_DIR).glob("*.pdf"))
+    files = list_supported_files()
     return {
         "count": len(files),
         "files": [
@@ -972,35 +588,46 @@ async def list_documents():
     }
 
 
+def save_uploaded_file(file: UploadFile, dest: Path) -> None:
+    with dest.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
     filename = Path(file.filename or "").name
     suffix = Path(filename).suffix.lower()
 
     if suffix not in SUPPORTED_UPLOAD_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Only PDF, DOCX and TXT files are supported.")
+        raise HTTPException(
+            status_code=400,
+            detail="Supported file types: PDF, DOCX, DOC, TXT, CSV, XLSX.",
+        )
 
     dest = Path(STATIC_PDF_DIR) / filename
 
     try:
-        with dest.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        save_uploaded_file(file, dest)
     finally:
         await file.close()
 
-    if suffix == ".pdf":
-        try:
-            chunks = add_pdf_to_knowledge_base(str(dest))
-            status = "indexed"
-            message = f"Uploaded and indexed: {filename}"
-        except Exception as e:
-            if dest.exists():
-                dest.unlink()
-            raise HTTPException(status_code=500, detail=f"Failed to index PDF: {e}") from e
-    else:
-        status = "stored-ready-for-rag"
-        chunks = 0
-        message = f"Uploaded and staged for future RAG integration: {filename}"
+    try:
+        chunks = add_document_to_knowledge_base(str(dest))
+        status = "indexed"
+        message = f"Uploaded and indexed: {filename}"
+    except Exception as e:
+        if dest.exists():
+            dest.unlink()
+        raise HTTPException(status_code=500, detail=f"Failed to index file: {e}") from e
+
+    uploaded_at = datetime.fromtimestamp(dest.stat().st_mtime).isoformat(timespec="seconds")
+    upsert_uploaded_file(
+        filename=filename,
+        file_type=get_supported_document_type(filename),
+        size_bytes=dest.stat().st_size,
+        file_path=str(dest),
+        uploaded_at=uploaded_at,
+    )
 
     return {
         "ok": True,
@@ -1008,7 +635,7 @@ async def upload_document(file: UploadFile = File(...)):
         "type": get_supported_document_type(filename),
         "status": status,
         "chunks_indexed": chunks,
-        "uploaded_at": datetime.fromtimestamp(dest.stat().st_mtime).isoformat(timespec="seconds"),
+        "uploaded_at": uploaded_at,
         "message": message,
     }
 
@@ -1025,7 +652,9 @@ async def delete_admin_file(filename: str):
         raise HTTPException(status_code=404, detail="File not found")
 
     dest.unlink()
-    return {"ok": True, "filename": filename, "message": "File deleted"}
+    delete_uploaded_file_record(filename)
+    rebuild_knowledge_base()
+    return {"ok": True, "filename": filename, "message": "File deleted and knowledge base rebuilt"}
 
 
 @app.post("/admin/files/{filename}/replace")
@@ -1036,32 +665,37 @@ async def replace_admin_file(filename: str, file: UploadFile = File(...)):
 
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in SUPPORTED_UPLOAD_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Only PDF, DOCX and TXT files are supported.")
+        raise HTTPException(
+            status_code=400,
+            detail="Supported file types: PDF, DOCX, DOC, TXT, CSV, XLSX.",
+        )
 
     try:
-        with dest.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        save_uploaded_file(file, dest)
     finally:
         await file.close()
 
-    if suffix == ".pdf":
-        try:
-            chunks = add_pdf_to_knowledge_base(str(dest))
-            status = "indexed"
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to index replacement PDF: {e}") from e
-    else:
-        chunks = 0
-        status = "stored-ready-for-rag"
+    try:
+        rebuild_knowledge_base()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to rebuild knowledge base: {e}") from e
+
+    uploaded_at = datetime.fromtimestamp(dest.stat().st_mtime).isoformat(timespec="seconds")
+    upsert_uploaded_file(
+        filename=filename,
+        file_type=get_supported_document_type(filename),
+        size_bytes=dest.stat().st_size,
+        file_path=str(dest),
+        uploaded_at=uploaded_at,
+    )
 
     return {
         "ok": True,
         "filename": filename,
         "type": get_supported_document_type(filename),
-        "status": status,
-        "chunks_indexed": chunks,
-        "uploaded_at": datetime.fromtimestamp(dest.stat().st_mtime).isoformat(timespec="seconds"),
-        "message": "File replaced successfully",
+        "status": "indexed",
+        "uploaded_at": uploaded_at,
+        "message": "File replaced and knowledge base rebuilt",
     }
 
 
@@ -1079,6 +713,123 @@ async def learn_from_whatsapp(req: LearnRequest):
         "ok": True,
         "chunks_indexed": chunks,
         "message": "Knowledge added to the bot's retrieval index.",
+    }
+
+
+@app.post("/campaign/update")
+async def campaign_update(req: CampaignUpdateRequest):
+    if not GOOGLE_API_KEY:
+        raise HTTPException(status_code=503, detail="GOOGLE_API_KEY is not configured")
+
+    result = process_campaign_update(req.phone, req.message, GOOGLE_API_KEY)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("reason", "Campaign not found"))
+
+    return result
+
+
+@app.get("/admin/stats")
+async def admin_stats():
+    return get_dashboard_stats()
+
+
+@app.get("/admin/campaigns")
+async def admin_list_campaigns():
+    return {"campaigns": list_campaigns()}
+
+
+@app.post("/admin/campaigns")
+async def admin_create_campaign(req: CampaignRequest):
+    try:
+        campaign = create_campaign(req.name, req.whatsapp_number, req.status)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "campaign": campaign}
+
+
+@app.put("/admin/campaigns/{campaign_id}")
+async def admin_update_campaign(campaign_id: int, req: CampaignRequest):
+    campaign = update_campaign(campaign_id, req.name, req.whatsapp_number, req.status)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return {"ok": True, "campaign": campaign}
+
+
+@app.delete("/admin/campaigns/{campaign_id}")
+async def admin_delete_campaign(campaign_id: int):
+    deleted = delete_campaign(campaign_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return {"ok": True, "message": "Campaign deleted"}
+
+
+@app.get("/admin/reports/campaign-activity")
+async def admin_campaign_activity_report():
+    return {"items": get_campaign_activity_report()}
+
+
+@app.get("/admin/reports/visitor-questions")
+async def admin_visitor_questions_report():
+    return {
+        "top_questions": get_top_visitor_questions(),
+        "unanswered": get_unanswered_questions(),
+    }
+
+
+@app.get("/admin/settings")
+async def admin_get_settings():
+    return get_all_settings()
+
+
+@app.put("/admin/settings")
+async def admin_update_settings(req: SettingsUpdateRequest):
+    if req.assistant_name is not None:
+        set_setting("assistant_name", req.assistant_name)
+    if req.system_prompt is not None:
+        set_setting("system_prompt", req.system_prompt)
+    if req.campaign_list_file is not None:
+        set_setting("campaign_list_file", req.campaign_list_file)
+
+    global qa_chain
+    if qa_chain is not None:
+        qa_chain = build_qa_chain_from_vectordb(vectordb)
+
+    return {"ok": True, "settings": get_all_settings()}
+
+
+@app.post("/admin/settings/calendar")
+async def admin_upload_calendar(file: UploadFile = File(...)):
+    filename = Path(file.filename or "calendar.json").name
+    dest = Path(CALENDAR_DIR) / filename
+
+    try:
+        save_uploaded_file(file, dest)
+    finally:
+        await file.close()
+
+    set_setting("calendar_file", str(dest))
+    return {
+        "ok": True,
+        "calendar_file": str(dest),
+        "message": "Calendar file uploaded successfully",
+    }
+
+
+@app.post("/admin/settings/campaign-list")
+async def admin_upload_campaign_list(file: UploadFile = File(...)):
+    filename = Path(file.filename or "campaign_list.json").name
+    dest = Path(CALENDAR_DIR) / filename
+
+    try:
+        save_uploaded_file(file, dest)
+    finally:
+        await file.close()
+
+    set_setting("campaign_list_file", str(dest))
+    return {
+        "ok": True,
+        "campaign_list_file": str(dest),
+        "message": "Campaign list file uploaded successfully",
     }
 
 

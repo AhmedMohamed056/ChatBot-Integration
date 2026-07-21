@@ -9,6 +9,49 @@ const {
   shouldRespondToMessage,
 } = require('../middleware/mentionFilter');
 
+function normalizePhone(value) {
+  if (!value) return '';
+  return String(value).split('@')[0].replace(/\D/g, '');
+}
+
+async function tryCampaignUpdate(message) {
+  const phone = normalizePhone(message.author || message.from);
+  const body = typeof message?.body === 'string' ? message.body.trim() : '';
+
+  if (!phone || !body) {
+    return false;
+  }
+
+  try {
+    const response = await ragClient.post('/campaign/update', {
+      phone,
+      message: body,
+    });
+
+    if (response?.data?.ok) {
+      if (response.data.stored) {
+        await message.reply('تم حفظ تحديث الحملة.');
+      }
+      logger.info('Campaign update processed.', {
+        phone,
+        stored: response.data.stored,
+        reason: response.data.reason,
+      });
+      return true;
+    }
+  } catch (error) {
+    if (error?.response?.status === 404) {
+      return false;
+    }
+    logger.error('Campaign update request failed.', {
+      phone,
+      error: error.message,
+    });
+  }
+
+  return false;
+}
+
 function parseLearnCommand(body) {
   const trimmed = typeof body === 'string' ? body.trim() : '';
 
@@ -51,6 +94,10 @@ async function handleIncomingMessage(message, client) {
       mentionedIds: message?.mentionedIds || [],
       fromMe: message?.fromMe,
     });
+
+    if (await tryCampaignUpdate(message)) {
+      return;
+    }
 
     if (!(await shouldProcessGroupMessage(message))) {
       return;
@@ -105,9 +152,10 @@ async function handleIncomingMessage(message, client) {
       prompt,
     });
 
-    const response = await ragClient.post('', {
+    const response = await ragClient.post('/chat', {
       message: prompt,
       session_id: message.author || message.from,
+      source: 'whatsapp',
     });
 
     const reply = response?.data?.reply;

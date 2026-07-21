@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <style>
+    :root{
+      --ink: #0E2B2C;
+      --panel: #133B3B;
+      --panel-2: #16474A;
+      --gold: #E3A857;
+      --gold-soft: #F0C685;
+      --sand: #F4EFE6;
+      --sage: #9FB8B3;
+      --line: rgba(244,239,230,0.10);
+      --radius: 18px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(1100px 600px at 85% -10%, rgba(227,168,87,0.18), transparent 60%), radial-gradient(900px 500px at -10% 110%, rgba(227,168,87,0.10), transparent 60%), var(--ink);
+      color: var(--sand);
+      font-family: 'Tajawal', sans-serif;
+      padding: 20px;
+    }
+    h1, h2, h3, .brand { font-family: 'Cairo', sans-serif; }
+    .admin-shell {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      gap: 20px;
+      min-height: calc(100vh - 40px);
+    }
+    .sidebar {
+      background: linear-gradient(155deg, var(--panel-2), var(--panel));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .brand { font-size: 20px; margin-bottom: 10px; color: var(--sand); }
+    .nav-item {
+      border: 1px solid var(--line);
+      background: rgba(244,239,230,0.03);
+      border-radius: 12px;
+      padding: 12px 14px;
+      color: var(--sand);
+      cursor: pointer;
+      font-weight: 700;
+      text-align: right;
+    }
+    .nav-item.active {
+      background: rgba(227,168,87,0.12);
+      border-color: rgba(227,168,87,0.42);
+      color: var(--gold-soft);
+    }
+    .main-panel {
+      background: rgba(244,239,230,0.02);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+    .page-title { font-size: 28px; margin: 0 0 8px; }
+    .subtext { color: var(--sage); margin: 0 0 24px; line-height: 1.8; }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 18px;
+      margin-bottom: 22px;
+    }
+    .card {
+      background: linear-gradient(155deg, var(--panel-2), var(--panel));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .label { color: var(--sage); font-size: 14px; margin-bottom: 10px; }
+    .value { font-size: 28px; font-family: 'Cairo', sans-serif; color: var(--gold-soft); margin-bottom: 6px; }
+    .muted { color: var(--sage); font-size: 13px; }
+    .latest-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 18px;
+    }
+    .btn {
+      padding: 12px 20px;
+      border-radius: 999px;
+      border: none;
+      cursor: pointer;
+      background: var(--gold);
+      color: #1a1206;
+      font-weight: 700;
+      font-family: 'Tajawal', sans-serif;
+      text-decoration: none;
+      display: inline-block;
+      margin-top: 12px;
+    }
+    .btn.secondary {
+      background: transparent;
+      color: var(--sand);
+      border: 1px solid var(--line);
+    }
+    .btn.danger { background: #8b2f2f; color: #fff; }
+    .drop-zone {
+      border: 1.5px dashed rgba(227,168,87,0.45);
+      border-radius: 16px;
+      padding: 24px;
+      background: rgba(227,168,87,0.05);
+      text-align: center;
+      margin-bottom: 18px;
+    }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      color: var(--sand);
+      font-size: 13px;
+    }
+    table.data-table th {
+      text-align: right;
+      padding: 8px 0;
+      color: var(--sage);
+      border-bottom: 1px solid var(--line);
+    }
+    table.data-table td {
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    .form-grid {
+      display: grid;
+      gap: 14px;
+      max-width: 640px;
+    }
+    .form-grid label {
+      display: grid;
+      gap: 8px;
+      color: var(--sand);
+      font-size: 14px;
+    }
+    .form-grid input, .form-grid textarea, .form-grid select {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(244,239,230,0.06);
+      padding: 12px 14px;
+      color: var(--sand);
+      font-family: 'Tajawal', sans-serif;
+      font-size: 15px;
+    }
+    .form-grid textarea { min-height: 120px; resize: vertical; }
+    .actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .message { color: var(--gold-soft); margin-top: 12px; min-height: 20px; }
+    @media (max-width: 900px) {
+      .admin-shell { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div id="admin-root"></div>
+  <script>
+    const { useState, useEffect } = React;
+
+    const NAV_ITEMS = [
+      { id: 'dashboard', label: 'Dashboard' },
+      { id: 'knowledge', label: 'Knowledge Base' },
+      { id: 'campaigns', label: 'Campaigns' },
+      { id: 'reports', label: 'Reports' },
+      { id: 'settings', label: 'Settings' },
+    ];
+
+    async function apiGet(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Request failed');
+      return res.json();
+    }
+
+    async function apiSend(url, method, body) {
+      const options = { method, headers: {} };
+      if (body instanceof FormData) {
+        options.body = body;
+      } else if (body !== undefined) {
+        options.headers['Content-Type'] = 'application/json';
+        options.body = JSON.stringify(body);
+      }
+      const res = await fetch(url, options);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Request failed');
+      return data;
+    }
+
+    function Sidebar({ active, onSelect }) {
+      return React.createElement('aside', { className: 'sidebar' },
+        React.createElement('div', { className: 'brand' }, 'لوحة الإدارة'),
+        NAV_ITEMS.map((item) =>
+          React.createElement('button', {
+            key: item.id,
+            className: `nav-item ${active === item.id ? 'active' : ''}`,
+            onClick: () => onSelect(item.id)
+          }, item.label)
+        ),
+        React.createElement('div', { style: { marginTop: 'auto' } },
+          React.createElement('a', { className: 'btn secondary', href: '/admin/logout' }, 'تسجيل الخروج')
+        )
+      );
+    }
+
+    function StatCard({ label, value }) {
+      return React.createElement('div', { className: 'card' },
+        React.createElement('div', { className: 'label' }, label),
+        React.createElement('div', { className: 'value' }, value ?? '0')
+      );
+    }
+
+    function DashboardView() {
+      const [stats, setStats] = useState(null);
+      useEffect(() => {
+        apiGet('/admin/stats').then(setStats).catch(() => setStats({}));
+      }, []);
+
+      if (!stats) {
+        return React.createElement('div', { className: 'muted' }, 'جاري تحميل الإحصائيات...');
+      }
+
+      const latestItems = [
+        ['آخر تحديث حملة', stats.latest_campaign_update?.campaign_name, stats.latest_campaign_update?.created_at],
+        ['آخر ملف مرفوع', stats.latest_uploaded_file?.filename, stats.latest_uploaded_file?.uploaded_at],
+        ['آخر سؤال زائر', stats.latest_visitor_question?.question, stats.latest_visitor_question?.asked_at],
+        ['آخر سؤال بلا إجابة', stats.latest_unanswered_question?.question, stats.latest_unanswered_question?.asked_at],
+      ];
+
+      return React.createElement('div', null,
+        React.createElement('h1', { className: 'page-title' }, 'Dashboard'),
+        React.createElement('p', { className: 'subtext' }, 'نظرة سريعة على أداء المساعد وقاعدة المعرفة.'),
+        React.createElement('div', { className: 'stats-grid' },
+          React.createElement(StatCard, { label: 'Total Knowledge Files', value: stats.total_knowledge_files }),
+          React.createElement(StatCard, { label: 'Total Campaigns', value: stats.total_campaigns }),
+          React.createElement(StatCard, { label: 'Total Campaign Messages', value: stats.total_campaign_messages }),
+          React.createElement(StatCard, { label: 'Total Visitor Questions', value: stats.total_visitor_questions }),
+          React.createElement(StatCard, { label: 'Total Unanswered Questions', value: stats.total_unanswered_questions })
+        ),
+        React.createElement('div', { className: 'latest-grid' },
+          latestItems.map(([title, main, sub]) =>
+            React.createElement('div', { className: 'card', key: title },
+              React.createElement('div', { className: 'label' }, title),
+              React.createElement('div', { style: { color: 'var(--sand)', marginBottom: '8px' } }, main || '—'),
+              React.createElement('div', { className: 'muted' }, sub || '—')
+            )
+          )
+        )
+      );
+    }
+
+    function KnowledgeBaseView() {
+      const [files, setFiles] = useState([]);
+      const [message, setMessage] = useState('');
+
+      function loadFiles() {
+        apiGet('/admin/files').then((data) => setFiles(data.files || [])).catch(() => setFiles([]));
+      }
+
+      useEffect(() => { loadFiles(); }, []);
+
+      async function uploadFile(file, replaceFilename = null) {
+        if (!file) return;
+        const form = new FormData();
+        form.append('file', file);
+        const url = replaceFilename
+          ? `/admin/files/${encodeURIComponent(replaceFilename)}/replace`
+          : '/upload';
+        try {
+          const data = await apiSend(url, 'POST', form);
+          setMessage(data.message || 'Uploaded successfully');
+          loadFiles();
+        } catch (err) {
+          setMessage(err.message || 'Upload failed');
+        }
+      }
+
+      async function deleteFile(filename) {
+        try {
+          const data = await apiSend(`/admin/files/${encodeURIComponent(filename)}`, 'DELETE');
+          setMessage(data.message || 'Deleted');
+          loadFiles();
+        } catch (err) {
+          setMessage(err.message || 'Delete failed');
+        }
+      }
+
+      return React.createElement('div', null,
+        React.createElement('h1', { className: 'page-title' }, 'Knowledge Base'),
+        React.createElement('p', { className: 'subtext' }, 'ارفع الملفات ليتم فهرستها داخل نظام RAG الحالي.'),
+        React.createElement('div', { className: 'card' },
+          React.createElement('div', { className: 'drop-zone' },
+            React.createElement('h3', { style: { margin: '0 0 10px', fontSize: '18px' } }, 'اسحب الملف أو اختره'),
+            React.createElement('p', { className: 'muted' }, 'PDF, DOCX, DOC, TXT, CSV, XLSX'),
+            React.createElement('label', { className: 'btn', htmlFor: 'upload-input' }, 'اختيار ملف'),
+            React.createElement('input', {
+              id: 'upload-input',
+              type: 'file',
+              accept: '.pdf,.docx,.doc,.txt,.csv,.xlsx',
+              style: { display: 'none' },
+              onChange: (e) => uploadFile(e.target.files?.[0])
+            }),
+            React.createElement('div', { className: 'message' }, message)
+          ),
+          React.createElement('table', { className: 'data-table' },
+            React.createElement('thead', null,
+              React.createElement('tr', null,
+                ['File Name', 'Type', 'Size', 'Upload Date', 'Actions'].map((h) =>
+                  React.createElement('th', { key: h }, h)
+                )
+              )
+            ),
+            React.createElement('tbody', null,
+              files.length === 0
+                ? React.createElement('tr', null, React.createElement('td', { colSpan: 5 }, 'No files uploaded yet.'))
+                : files.map((item) =>
+                    React.createElement('tr', { key: item.filename },
+                      React.createElement('td', null, item.filename),
+                      React.createElement('td', null, item.type),
+                      React.createElement('td', null, `${item.size_kb} KB`),
+                      React.createElement('td', null, item.uploaded_at),
+                      React.createElement('td', null,
+                        React.createElement('div', { className: 'actions-row' },
+                          React.createElement('label', { className: 'btn secondary', htmlFor: `replace-${item.filename}`, style: { marginTop: 0, cursor: 'pointer' } }, 'Replace'),
+                          React.createElement('input', {
+                            id: `replace-${item.filename}`,
+                            type: 'file',
+                            accept: '.pdf,.docx,.doc,.txt,.csv,.xlsx',
+                            style: { display: 'none' },
+                            onChange: (e) => uploadFile(e.target.files?.[0], item.filename)
+                          }),
+                          React.createElement('button', {
+                            className: 'btn secondary danger',
+                            style: { marginTop: 0 },
+                            onClick: () => deleteFile(item.filename)
+                          }, 'Delete')
+                        )
+                      )
+                    )
+                  )
+            )
+          )
+        )
+      );
+    }
+
+    function CampaignsView() {
+      const [campaigns, setCampaigns] = useState([]);
+      const [form, setForm] = useState({ name: '', whatsapp_number: '', status: 'active' });
+      const [editingId, setEditingId] = useState(null);
+      const [message, setMessage] = useState('');
+
+      function loadCampaigns() {
+        apiGet('/admin/campaigns').then((data) => setCampaigns(data.campaigns || [])).catch(() => setCampaigns([]));
+      }
+
+      useEffect(() => { loadCampaigns(); }, []);
+
+      async function saveCampaign(e) {
+        e.preventDefault();
+        try {
+          if (editingId) {
+            await apiSend(`/admin/campaigns/${editingId}`, 'PUT', form);
+            setMessage('Campaign updated');
+          } else {
+            await apiSend('/admin/campaigns', 'POST', form);
+            setMessage('Campaign created');
+          }
+          setForm({ name: '', whatsapp_number: '', status: 'active' });
+          setEditingId(null);
+          loadCampaigns();
+        } catch (err) {
+          setMessage(err.message || 'Save failed');
+        }
+      }
+
+      async function deleteCampaign(id) {
+        try {
+          await apiSend(`/admin/campaigns/${id}`, 'DELETE');
+          setMessage('Campaign deleted');
+          loadCampaigns();
+        } catch (err) {
+          setMessage(err.message || 'Delete failed');
+        }
+      }
+
+      function startEdit(campaign) {
+        setEditingId(campaign.id);
+        setForm({
+          name: campaign.name,
+          whatsapp_number: campaign.whatsapp_number,
+          status: campaign.status,
+        });
+      }
+
+      return React.createElement('div', null,
+        React.createElement('h1', { className: 'page-title' }, 'Campaigns'),
+        React.createElement('p', { className: 'subtext' }, 'إدارة الحملات المرتبطة بأرقام واتساب.'),
+        React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
+          React.createElement('form', { className: 'form-grid', onSubmit: saveCampaign },
+            React.createElement('label', null, 'Campaign Name',
+              React.createElement('input', { value: form.name, onChange: (e) => setForm({ ...form, name: e.target.value }), required: true })
+            ),
+            React.createElement('label', null, 'WhatsApp Number',
+              React.createElement('input', { value: form.whatsapp_number, onChange: (e) => setForm({ ...form, whatsapp_number: e.target.value }), required: true })
+            ),
+            React.createElement('label', null, 'Status',
+              React.createElement('select', { value: form.status, onChange: (e) => setForm({ ...form, status: e.target.value }) },
+                React.createElement('option', { value: 'active' }, 'active'),
+                React.createElement('option', { value: 'inactive' }, 'inactive')
+              )
+            ),
+            React.createElement('div', { className: 'actions-row' },
+              React.createElement('button', { className: 'btn', type: 'submit' }, editingId ? 'Update Campaign' : 'Add Campaign'),
+              editingId && React.createElement('button', {
+                className: 'btn secondary',
+                type: 'button',
+                onClick: () => { setEditingId(null); setForm({ name: '', whatsapp_number: '', status: 'active' }); }
+              }, 'Cancel')
+            ),
+            React.createElement('div', { className: 'message' }, message)
+          )
+        ),
+        React.createElement('table', { className: 'data-table' },
+          React.createElement('thead', null,
+            React.createElement('tr', null,
+              ['Campaign Name', 'WhatsApp Number', 'Status', 'Created Date', 'Actions'].map((h) =>
+                React.createElement('th', { key: h }, h)
+              )
+            )
+          ),
+          React.createElement('tbody', null,
+            campaigns.length === 0
+              ? React.createElement('tr', null, React.createElement('td', { colSpan: 5 }, 'No campaigns yet.'))
+              : campaigns.map((item) =>
+                  React.createElement('tr', { key: item.id },
+                    React.createElement('td', null, item.name),
+                    React.createElement('td', null, item.whatsapp_number),
+                    React.createElement('td', null, item.status),
+                    React.createElement('td', null, item.created_at),
+                    React.createElement('td', null,
+                      React.createElement('div', { className: 'actions-row' },
+                        React.createElement('button', { className: 'btn secondary', style: { marginTop: 0 }, onClick: () => startEdit(item) }, 'Edit'),
+                        React.createElement('button', { className: 'btn secondary danger', style: { marginTop: 0 }, onClick: () => deleteCampaign(item.id) }, 'Delete')
+                      )
+                    )
+                  )
+                )
+          )
+        )
+      );
+    }
+
+    function ReportsView() {
+      const [campaignReport, setCampaignReport] = useState([]);
+      const [topQuestions, setTopQuestions] = useState([]);
+      const [unanswered, setUnanswered] = useState([]);
+
+      useEffect(() => {
+        apiGet('/admin/reports/campaign-activity').then((d) => setCampaignReport(d.items || [])).catch(() => setCampaignReport([]));
+        apiGet('/admin/reports/visitor-questions').then((d) => {
+          setTopQuestions(d.top_questions || []);
+          setUnanswered(d.unanswered || []);
+        }).catch(() => {});
+      }, []);
+
+      return React.createElement('div', null,
+        React.createElement('h1', { className: 'page-title' }, 'Reports'),
+        React.createElement('p', { className: 'subtext' }, 'تقارير نشاط الحملات وأسئلة الزوار.'),
+        React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
+          React.createElement('h2', { style: { marginTop: 0 } }, 'Campaign Activity'),
+          React.createElement('table', { className: 'data-table' },
+            React.createElement('thead', null,
+              React.createElement('tr', null,
+                ['Campaign', 'Last Message', 'Extracted Information', 'Date'].map((h) =>
+                  React.createElement('th', { key: h }, h)
+                )
+              )
+            ),
+            React.createElement('tbody', null,
+              campaignReport.length === 0
+                ? React.createElement('tr', null, React.createElement('td', { colSpan: 4 }, 'No campaign activity yet.'))
+                : campaignReport.map((item, idx) =>
+                    React.createElement('tr', { key: idx },
+                      React.createElement('td', null, item.campaign),
+                      React.createElement('td', null, item.last_message),
+                      React.createElement('td', null, item.extracted_info),
+                      React.createElement('td', null, item.date)
+                    )
+                  )
+            )
+          )
+        ),
+        React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
+          React.createElement('h2', { style: { marginTop: 0 } }, 'Visitor Questions'),
+          React.createElement('table', { className: 'data-table' },
+            React.createElement('thead', null,
+              React.createElement('tr', null,
+                React.createElement('th', null, 'Top Questions'),
+                React.createElement('th', null, 'Question Count')
+              )
+            ),
+            React.createElement('tbody', null,
+              topQuestions.length === 0
+                ? React.createElement('tr', null, React.createElement('td', { colSpan: 2 }, 'No visitor questions yet.'))
+                : topQuestions.map((item, idx) =>
+                    React.createElement('tr', { key: idx },
+                      React.createElement('td', null, item.question),
+                      React.createElement('td', null, item.question_count)
+                    )
+                  )
+            )
+          )
+        ),
+        React.createElement('div', { className: 'card' },
+          React.createElement('h2', { style: { marginTop: 0 } }, 'Questions Without Answers'),
+          React.createElement('table', { className: 'data-table' },
+            React.createElement('thead', null,
+              React.createElement('tr', null,
+                React.createElement('th', null, 'Question'),
+                React.createElement('th', null, 'Date')
+              )
+            ),
+            React.createElement('tbody', null,
+              unanswered.length === 0
+                ? React.createElement('tr', null, React.createElement('td', { colSpan: 2 }, 'No unanswered questions.'))
+                : unanswered.map((item, idx) =>
+                    React.createElement('tr', { key: idx },
+                      React.createElement('td', null, item.question),
+                      React.createElement('td', null, item.asked_at)
+                    )
+                  )
+            )
+          )
+        )
+      );
+    }
+
+    function SettingsView() {
+      const [settings, setSettings] = useState({
+        assistant_name: '',
+        system_prompt: '',
+        calendar_file: '',
+        campaign_list_file: '',
+      });
+      const [message, setMessage] = useState('');
+
+      useEffect(() => {
+        apiGet('/admin/settings').then(setSettings).catch(() => {});
+      }, []);
+
+      async function saveSettings(e) {
+        e.preventDefault();
+        try {
+          const data = await apiSend('/admin/settings', 'PUT', settings);
+          setSettings(data.settings || settings);
+          setMessage('Settings saved');
+        } catch (err) {
+          setMessage(err.message || 'Save failed');
+        }
+      }
+
+      async function uploadCalendar(file) {
+        if (!file) return;
+        const form = new FormData();
+        form.append('file', file);
+        try {
+          const data = await apiSend('/admin/settings/calendar', 'POST', form);
+          setSettings((prev) => ({ ...prev, calendar_file: data.calendar_file || prev.calendar_file }));
+          setMessage(data.message || 'Calendar uploaded');
+        } catch (err) {
+          setMessage(err.message || 'Upload failed');
+        }
+      }
+
+      async function uploadCampaignList(file) {
+        if (!file) return;
+        const form = new FormData();
+        form.append('file', file);
+        try {
+          const data = await apiSend('/admin/settings/campaign-list', 'POST', form);
+          setSettings((prev) => ({ ...prev, campaign_list_file: data.campaign_list_file || prev.campaign_list_file }));
+          setMessage(data.message || 'Campaign list uploaded');
+        } catch (err) {
+          setMessage(err.message || 'Upload failed');
+        }
+      }
+
+      return React.createElement('div', null,
+        React.createElement('h1', { className: 'page-title' }, 'Settings'),
+        React.createElement('p', { className: 'subtext' }, 'إعدادات المساعد والتقويم.'),
+        React.createElement('div', { className: 'card' },
+          React.createElement('form', { className: 'form-grid', onSubmit: saveSettings },
+            React.createElement('label', null, 'Assistant Name',
+              React.createElement('input', {
+                value: settings.assistant_name || '',
+                onChange: (e) => setSettings({ ...settings, assistant_name: e.target.value })
+              })
+            ),
+            React.createElement('label', null, 'System Prompt',
+              React.createElement('textarea', {
+                value: settings.system_prompt || '',
+                onChange: (e) => setSettings({ ...settings, system_prompt: e.target.value })
+              })
+            ),
+            React.createElement('label', null, 'Calendar File',
+              React.createElement('input', { value: settings.calendar_file || '', readOnly: true })
+            ),
+            React.createElement('label', null, 'Upload Calendar File',
+              React.createElement('input', {
+                type: 'file',
+                accept: '.json,.txt,.csv',
+                onChange: (e) => uploadCalendar(e.target.files?.[0])
+              })
+            ),
+            React.createElement('label', null, 'Campaign List File',
+              React.createElement('input', {
+                value: settings.campaign_list_file || '',
+                readOnly: true
+              })
+            ),
+            React.createElement('label', null, 'Upload Campaign List File',
+              React.createElement('input', {
+                type: 'file',
+                accept: '.json,.txt,.csv',
+                onChange: (e) => uploadCampaignList(e.target.files?.[0])
+              })
+            ),
+            React.createElement('button', { className: 'btn', type: 'submit' }, 'Save Settings'),
+            React.createElement('div', { className: 'message' }, message)
+          )
+        )
+      );
+    }
+
+    function AdminApp() {
+      const [activeView, setActiveView] = useState('dashboard');
+
+      const views = {
+        dashboard: DashboardView,
+        knowledge: KnowledgeBaseView,
+        campaigns: CampaignsView,
+        reports: ReportsView,
+        settings: SettingsView,
+      };
+      const ActiveView = views[activeView] || DashboardView;
+
+      return React.createElement('div', { className: 'admin-shell' },
+        React.createElement(Sidebar, { active: activeView, onSelect: setActiveView }),
+        React.createElement('main', { className: 'main-panel' },
+          React.createElement(ActiveView)
+        )
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('admin-root')).render(React.createElement(AdminApp));
+  </script>
+</body>
+</html>

@@ -1,0 +1,394 @@
+"""SQLite persistence for dynamic application data."""
+
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+DB_PATH = Path(__file__).resolve().parent / "app.db"
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+@contextmanager
+def get_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def init_db() -> None:
+    with get_connection() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS campaigns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                whatsapp_number TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS campaign_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id INTEGER NOT NULL,
+                campaign_name TEXT NOT NULL,
+                original_message TEXT NOT NULL,
+                extracted_info TEXT NOT NULL,
+                event_date TEXT,
+                expires_at TEXT,
+                created_at TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS uploaded_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL UNIQUE,
+                file_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                uploaded_at TEXT NOT NULL,
+                file_path TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS visitor_questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                question TEXT NOT NULL,
+                asked_at TEXT NOT NULL,
+                answered INTEGER NOT NULL DEFAULT 0,
+                session_id TEXT,
+                source TEXT NOT NULL DEFAULT 'website'
+            );
+
+            CREATE TABLE IF NOT EXISTS system_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+
+        defaults = {
+            "assistant_name": "معين الزائرين",
+            "system_prompt": "",
+            "calendar_file": "",
+            "campaign_list_file": "",
+            "timezone": "Asia/Riyadh",
+        }
+        for key, value in defaults.items():
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO system_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (key, value, utc_now()),
+            )
+
+
+def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return dict(row)
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT value FROM system_settings WHERE key = ?", (key,)
+        ).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO system_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (key, value, utc_now()),
+        )
+
+
+def get_all_settings() -> dict[str, str]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT key, value FROM system_settings").fetchall()
+    return {row["key"]: row["value"] for row in rows}
+
+
+def normalize_phone(phone: str) -> str:
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    if digits.startswith("00"):
+        digits = digits[2:]
+    return digits
+
+
+def create_campaign(name: str, whatsapp_number: str, status: str = "active") -> dict[str, Any]:
+    phone = normalize_phone(whatsapp_number)
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO campaigns (name, whatsapp_number, status, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (name.strip(), phone, status, utc_now()),
+        )
+        campaign_id = cur.lastrowid
+        row = conn.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
+    return row_to_dict(row)
+
+
+def update_campaign(campaign_id: int, name: str, whatsapp_number: str, status: str) -> dict[str, Any] | None:
+    phone = normalize_phone(whatsapp_number)
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE campaigns
+            SET name = ?, whatsapp_number = ?, status = ?
+            WHERE id = ?
+            """,
+            (name.strip(), phone, status, campaign_id),
+        )
+        row = conn.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
+    return row_to_dict(row)
+
+
+def delete_campaign(campaign_id: int) -> bool:
+    with get_connection() as conn:
+        cur = conn.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
+    return cur.rowcount > 0
+
+
+def list_campaigns() -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM campaigns ORDER BY created_at DESC"
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def get_campaign_by_phone(phone: str) -> dict[str, Any] | None:
+    normalized = normalize_phone(phone)
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM campaigns WHERE whatsapp_number = ? AND status = 'active'",
+            (normalized,),
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def add_campaign_message(
+    campaign_id: int,
+    campaign_name: str,
+    original_message: str,
+    extracted_info: str,
+    event_date: str | None = None,
+    expires_at: str | None = None,
+) -> dict[str, Any]:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO campaign_messages (
+                campaign_id, campaign_name, original_message, extracted_info,
+                event_date, expires_at, created_at, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                campaign_id,
+                campaign_name,
+                original_message,
+                extracted_info,
+                event_date,
+                expires_at,
+                utc_now(),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM campaign_messages WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def get_active_campaign_messages() -> list[dict[str, Any]]:
+    from date_utils import get_timezone
+
+    tz = get_timezone()
+    today = datetime.now(tz).date().isoformat()
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM campaign_messages
+            WHERE is_active = 1
+              AND (expires_at IS NULL OR expires_at >= ?)
+            ORDER BY created_at DESC
+            """,
+            (today,),
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def get_campaign_activity_report() -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT cm.campaign_name AS campaign,
+                   cm.original_message AS last_message,
+                   cm.extracted_info,
+                   cm.created_at AS date
+            FROM campaign_messages cm
+            INNER JOIN (
+                SELECT campaign_id, MAX(id) AS max_id
+                FROM campaign_messages
+                GROUP BY campaign_id
+            ) latest ON cm.id = latest.max_id
+            ORDER BY cm.created_at DESC
+            """
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def upsert_uploaded_file(
+    filename: str,
+    file_type: str,
+    size_bytes: int,
+    file_path: str,
+    uploaded_at: str | None = None,
+) -> dict[str, Any]:
+    uploaded_at = uploaded_at or utc_now()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO uploaded_files (filename, file_type, size_bytes, uploaded_at, file_path)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(filename) DO UPDATE SET
+                file_type = excluded.file_type,
+                size_bytes = excluded.size_bytes,
+                uploaded_at = excluded.uploaded_at,
+                file_path = excluded.file_path
+            """,
+            (filename, file_type, size_bytes, uploaded_at, file_path),
+        )
+        row = conn.execute(
+            "SELECT * FROM uploaded_files WHERE filename = ?", (filename,)
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def delete_uploaded_file_record(filename: str) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM uploaded_files WHERE filename = ?", (filename,))
+
+
+def list_uploaded_files_db() -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM uploaded_files ORDER BY uploaded_at DESC"
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def add_visitor_question(
+    question: str,
+    answered: bool,
+    session_id: str | None = None,
+    source: str = "website",
+) -> dict[str, Any]:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO visitor_questions (question, asked_at, answered, session_id, source)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (question.strip(), utc_now(), 1 if answered else 0, session_id, source),
+        )
+        row = conn.execute(
+            "SELECT * FROM visitor_questions WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def get_dashboard_stats() -> dict[str, Any]:
+    with get_connection() as conn:
+        total_files = conn.execute("SELECT COUNT(*) AS c FROM uploaded_files").fetchone()["c"]
+        total_campaigns = conn.execute("SELECT COUNT(*) AS c FROM campaigns").fetchone()["c"]
+        total_campaign_messages = conn.execute(
+            "SELECT COUNT(*) AS c FROM campaign_messages"
+        ).fetchone()["c"]
+        total_questions = conn.execute(
+            "SELECT COUNT(*) AS c FROM visitor_questions"
+        ).fetchone()["c"]
+        total_unanswered = conn.execute(
+            "SELECT COUNT(*) AS c FROM visitor_questions WHERE answered = 0"
+        ).fetchone()["c"]
+
+        latest_campaign = conn.execute(
+            """
+            SELECT campaign_name, created_at FROM campaign_messages
+            ORDER BY created_at DESC LIMIT 1
+            """
+        ).fetchone()
+        latest_file = conn.execute(
+            "SELECT filename, uploaded_at FROM uploaded_files ORDER BY uploaded_at DESC LIMIT 1"
+        ).fetchone()
+        latest_question = conn.execute(
+            "SELECT question, asked_at FROM visitor_questions ORDER BY asked_at DESC LIMIT 1"
+        ).fetchone()
+        latest_unanswered = conn.execute(
+            """
+            SELECT question, asked_at FROM visitor_questions
+            WHERE answered = 0 ORDER BY asked_at DESC LIMIT 1
+            """
+        ).fetchone()
+
+    return {
+        "total_knowledge_files": total_files,
+        "total_campaigns": total_campaigns,
+        "total_campaign_messages": total_campaign_messages,
+        "total_visitor_questions": total_questions,
+        "total_unanswered_questions": total_unanswered,
+        "latest_campaign_update": row_to_dict(latest_campaign),
+        "latest_uploaded_file": row_to_dict(latest_file),
+        "latest_visitor_question": row_to_dict(latest_question),
+        "latest_unanswered_question": row_to_dict(latest_unanswered),
+    }
+
+
+def get_top_visitor_questions(limit: int = 10) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT question, COUNT(*) AS question_count
+            FROM visitor_questions
+            GROUP BY LOWER(TRIM(question))
+            ORDER BY question_count DESC, question ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def get_unanswered_questions(limit: int = 50) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT question, asked_at
+            FROM visitor_questions
+            WHERE answered = 0
+            ORDER BY asked_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]

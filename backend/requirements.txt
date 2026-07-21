@@ -1,3 +1,7 @@
+# Pin torch to a CPU build that loads c10.dll correctly on Windows/Anaconda.
+# Newer wheels (e.g. 2.13.0) fail with WinError 1114 on c10.dll initialization.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 fastapi
 uvicorn
 python-multipart
@@ -5,8 +9,13 @@ langchain
 langchain-community
 langchain-huggingface
 langchain-google-genai
+langchain-text-splitters
 chromadb
 pymupdf
 python-dotenv
 langchain-classic
 sentence-transformers
+torch==2.6.0+cpu
+python-docx
+openpyxl
+hijri-converter
