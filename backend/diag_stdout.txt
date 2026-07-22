@@ -1,0 +1,19 @@
+[16:28:03] START diag
+[16:28:04] STEP 1: import chromadb
+[16:28:11]   chromadb version = 1.5.9
+[16:28:11] STEP 2: import langchain_community Chroma
+[16:28:15]   ok
+[16:28:15] STEP 3: get_embeddings (HuggingFaceEmbeddings)
+[16:29:22]   embeddings loaded
+[16:29:22] STEP 4: list supported files
+[16:29:23]   found 1 file(s)
+[16:29:23]   total chunks = 4
+[16:29:23] STEP 5: chromadb.config.Settings(is_persistent=True) + persist_directory
+[16:29:23]   ok
+[16:29:23] STEP 6: chromadb.Client(settings)
+[16:29:25]   ok
+[16:29:25] STEP 7: client.get_or_create_collection(name='langchain', embedding_function=None)
+[16:29:25]   ok
+[16:29:25] STEP 8: embed_documents (generate embeddings)
+[16:29:31]   embeddings generated: 4 vectors, dim=768
+[16:29:31] STEP 9: collection.upsert(...)  <-- suspected hang location

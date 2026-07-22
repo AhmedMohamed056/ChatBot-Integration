@@ -1,5 +1,10 @@
+import asyncio
 import os
 import shutil
+import sys
+import time
+import threading
+import faulthandler
 from datetime import datetime
 from pathlib import Path
 
@@ -42,9 +47,14 @@ from document_service import (
     SUPPORTED_UPLOAD_EXTENSIONS,
     get_supported_document_type,
     list_supported_files,
+    load_documents,
     rebuild_vectordb,
-    split_file,
+    split_documents,
 )
+
+# Ensure emoji/UTF-8 output works on Windows consoles (cp1256/cp1252 can't encode them)
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -53,10 +63,10 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_SESSION_COOKIE = "admin_session"
 
 # ---- إعدادات المستندات ----
-STATIC_PDF_DIR = "static_pdfs"
-DB_DIR = "chroma_db"
-CALENDAR_DIR = "calendar_files"
 BACKEND_DIR = Path(__file__).resolve().parent
+STATIC_PDF_DIR = str(BACKEND_DIR / "static_pdfs")
+DB_DIR = str(BACKEND_DIR / "chroma_db")
+CALENDAR_DIR = str(BACKEND_DIR / "calendar_files")
 os.makedirs(STATIC_PDF_DIR, exist_ok=True)
 os.makedirs(CALENDAR_DIR, exist_ok=True)
 
@@ -141,6 +151,39 @@ def get_embeddings():
     return embeddings
 
 
+class ProgressEmbeddings:
+    """Wrapper that prints embedding progress from inside the embedding loop."""
+
+    BATCH_SIZE = 50
+
+    def __init__(self, base_embeddings):
+        self._base = base_embeddings
+        self.embedding_time = 0.0
+
+    def embed_documents(self, texts):
+        total = len(texts)
+        t0 = time.time()
+        all_embeddings = []
+        batch_size = self.BATCH_SIZE
+        for i in range(0, total, batch_size):
+            batch = texts[i:i + batch_size]
+            batch_embeddings = self._base.embed_documents(batch)
+            all_embeddings.extend(batch_embeddings)
+            done = min(i + batch_size, total)
+            print(f"Embedding: {done} / {total}")
+        self.embedding_time = time.time() - t0
+        print("Finished")
+        return all_embeddings
+
+    def embed_query(self, text):
+        return self._base.embed_query(text)
+
+    def __getattr__(self, name):
+        if name == "_base":
+            raise AttributeError(name)
+        return getattr(self._base, name)
+
+
 def get_assistant_name() -> str:
     settings = get_all_settings()
     return settings.get("assistant_name") or "معين الزائرين"
@@ -152,6 +195,7 @@ def get_custom_system_prompt() -> str:
 
 
 def build_qa_chain_from_vectordb(db):
+    print("Refreshing retriever")
     retriever = db.as_retriever(search_kwargs={"k": 3})
 
     llm = ChatGoogleGenerativeAI(
@@ -221,6 +265,7 @@ Context:
     ])
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
 
+    print("Refreshing qa_chain")
     return create_retrieval_chain(history_aware_retriever, question_answer_chain)
 
 
@@ -252,7 +297,9 @@ def refresh_qa_chain():
     global qa_chain, vectordb
 
     emb = get_embeddings()
-    vectordb = rebuild_vectordb(emb, DB_DIR)
+    progress_emb = ProgressEmbeddings(emb)
+    vectordb = rebuild_vectordb(progress_emb, DB_DIR)
+    vectordb._embedding_function = emb
     qa_chain = build_qa_chain_from_vectordb(vectordb)
     return qa_chain
 
@@ -282,31 +329,89 @@ def add_text_to_knowledge_base(question: str, answer: str, source: str = "whatsa
 
 
 def add_document_to_knowledge_base(file_path: str):
-    """Add a newly uploaded document into Chroma and refresh the QA chain."""
+    """Add a newly uploaded document into Chroma and refresh the QA chain.
+
+    This function performs CPU/IO-blocking work (document loading, splitting,
+    embedding generation, Chroma writes, QA-chain rebuild).  It must be
+    executed in a worker thread when called from an async endpoint so that
+    the FastAPI event loop stays free to serve other requests.
+    """
     global qa_chain, vectordb
 
-    split_docs = split_file(file_path)
+    pipeline_t0 = time.time()
+
+    # --- Loading document ---
+    print("Loading document...")
+    t0 = time.time()
+    docs = load_documents(file_path)
+    load_time = time.time() - t0
+    print(f"Document loaded ({load_time:.1f} sec) - {len(docs)} page(s)")
+
+    if not docs:
+        raise ValueError("No text could be extracted from this file.")
+
+    # --- Splitting ---
+    print("Splitting...")
+    t0 = time.time()
+    split_docs = split_documents(docs)
+    split_time = time.time() - t0
+    print(f"Splitting finished ({split_time:.1f} sec) - {len(split_docs)} chunk(s)")
+
     if not split_docs:
         raise ValueError("No text could be extracted from this file.")
 
+    # --- Embedding + Writing to Chroma ---
+    # Embeddings are generated *inside* the Chroma call via ProgressEmbeddings.
+    # We track embedding time separately from total Chroma time so both can
+    # be reported.
+    print("Embedding started...")
     emb = get_embeddings()
+    progress_emb = ProgressEmbeddings(emb)
+
     if vectordb is None:
         if os.path.exists(DB_DIR) and os.listdir(DB_DIR):
             vectordb = Chroma(
                 persist_directory=DB_DIR,
-                embedding_function=emb,
+                embedding_function=progress_emb,
             )
+            t0 = time.time()
             vectordb.add_documents(split_docs)
+            total_time = time.time() - t0
         else:
+            t0 = time.time()
             vectordb = Chroma.from_documents(
                 documents=split_docs,
-                embedding=emb,
+                embedding=progress_emb,
                 persist_directory=DB_DIR,
             )
+            total_time = time.time() - t0
+        print("Refreshing global vectordb")
+        vectordb._embedding_function = emb
     else:
+        original_emb = vectordb._embedding_function
+        vectordb._embedding_function = progress_emb
+        t0 = time.time()
         vectordb.add_documents(split_docs)
+        total_time = time.time() - t0
+        vectordb._embedding_function = original_emb
 
+    embed_time = progress_emb.embedding_time
+    chroma_time = total_time - embed_time
+    print(f"Embedding finished ({embed_time:.1f} sec)")
+
+    print("Writing to Chroma...")
+    print(f"Writing completed ({chroma_time:.1f} sec)")
+
+    # --- Building QA chain ---
+    print("Building QA chain...")
+    t0 = time.time()
     qa_chain = build_qa_chain_from_vectordb(vectordb)
+    qa_time = time.time() - t0
+    print(f"QA chain rebuilt ({qa_time:.1f} sec)")
+
+    pipeline_time = time.time() - pipeline_t0
+    print(f"Indexing pipeline completed ({pipeline_time:.1f} sec)")
+
     return len(split_docs)
 
 
@@ -480,12 +585,37 @@ async def admin_logout():
     return response
 
 
+def cleanup_orphaned_file_records() -> int:
+    """Remove uploaded_files records whose files no longer exist on disk.
+
+    This handles the case where a file was deleted manually (not via the API)
+    and the database record was left behind. Returns the number of removed
+    records.
+    """
+    db_rows = list_uploaded_files_db()
+    removed = 0
+    for row in db_rows:
+        filename = row["filename"]
+        file_path = Path(row["file_path"]) if row.get("file_path") else Path(STATIC_PDF_DIR) / filename
+        if not file_path.exists():
+            print(f"🧹 Removing orphaned DB record for deleted file: {filename}")
+            delete_uploaded_file_record(filename)
+            removed += 1
+    return removed
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize SQLite and build the knowledge base from uploaded files."""
     global qa_chain
 
     init_db()
+
+    # Remove DB records for files that were deleted manually (not via the API)
+    removed = cleanup_orphaned_file_records()
+    if removed:
+        print(f"🧹 Cleaned up {removed} orphaned file record(s).")
+
     supported_files = list_supported_files()
 
     if not supported_files:
@@ -605,20 +735,40 @@ async def upload_document(file: UploadFile = File(...)):
         )
 
     dest = Path(STATIC_PDF_DIR) / filename
+    total_t0 = time.time()
 
+    print("========== UPLOAD START ==========")
+    print(f"File: {filename}")
+    print("")
+
+    # --- Saving file (fast IO, stays on the event loop) ---
+    print("Saving file...")
+    t0 = time.time()
     try:
         save_uploaded_file(file, dest)
     finally:
         await file.close()
+    save_time = time.time() - t0
+    size_bytes = dest.stat().st_size
+    size_mb = size_bytes / (1024 * 1024)
+    print(f"File saved ({save_time:.1f} sec) - {size_mb:.1f} MB")
 
+    # --- Indexing pipeline (CPU/IO blocking -> worker thread) ---
+    # add_document_to_knowledge_base loads, splits, embeds, writes to Chroma
+    # and rebuilds the QA chain.  Running it via asyncio.to_thread frees the
+    # FastAPI event loop so /health, /docs, /admin/* stay responsive.
     try:
-        chunks = add_document_to_knowledge_base(str(dest))
+        chunks = await asyncio.to_thread(add_document_to_knowledge_base, str(dest))
         status = "indexed"
         message = f"Uploaded and indexed: {filename}"
     except Exception as e:
         if dest.exists():
             dest.unlink()
         raise HTTPException(status_code=500, detail=f"Failed to index file: {e}") from e
+
+    total_time = time.time() - total_t0
+    print(f"UPLOAD COMPLETE - Total upload time: {total_time:.1f} sec")
+    print("====================================")
 
     uploaded_at = datetime.fromtimestamp(dest.stat().st_mtime).isoformat(timespec="seconds")
     upsert_uploaded_file(
@@ -670,15 +820,38 @@ async def replace_admin_file(filename: str, file: UploadFile = File(...)):
             detail="Supported file types: PDF, DOCX, DOC, TXT, CSV, XLSX.",
         )
 
+    total_t0 = time.time()
+
+    print("========== Replace & Rebuild ==========")
+    print("File:")
+    print(filename)
+    print("")
+
+    print("------------------------------------")
+    print("Step 1")
+    print("Saving file...")
+    t0 = time.time()
     try:
         save_uploaded_file(file, dest)
     finally:
         await file.close()
+    save_time = time.time() - t0
+    size_bytes = dest.stat().st_size
+    size_mb = size_bytes / (1024 * 1024)
+    print("Done")
+    print(f"Size: {size_mb:.1f} MB")
+    print(f"Time: {save_time:.1f} sec")
 
     try:
         rebuild_knowledge_base()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to rebuild knowledge base: {e}") from e
+
+    total_time = time.time() - total_t0
+    print("------------------------------------")
+    print("TOTAL")
+    print(f"{total_time:.1f} sec")
+    print("====================================")
 
     uploaded_at = datetime.fromtimestamp(dest.stat().st_mtime).isoformat(timespec="seconds")
     upsert_uploaded_file(

@@ -5,13 +5,14 @@ from __future__ import annotations
 import csv
 import os
 import shutil
+import time
 from pathlib import Path
 
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-STATIC_DOCS_DIR = "static_pdfs"
+STATIC_DOCS_DIR = str(Path(__file__).resolve().parent / "static_pdfs")
 SUPPORTED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".doc", ".txt", ".csv", ".xlsx"}
 
 
@@ -123,12 +124,18 @@ def rebuild_vectordb(embedding_function, db_dir: str):
     if os.path.exists(db_dir):
         shutil.rmtree(db_dir)
 
+    print("------------------------------------")
+    print("Loading and splitting all supported files...")
+    t0 = time.time()
     all_docs: list[Document] = []
     for file_path in list_supported_files():
         try:
             all_docs.extend(split_file(str(file_path)))
         except Exception as exc:
             print(f"⚠️ Skipped indexing {file_path.name}: {exc}")
+    split_time = time.time() - t0
+    print(f"Total chunks: {len(all_docs)}")
+    print(f"Time: {split_time:.1f} sec")
 
     if not all_docs:
         return Chroma(
@@ -136,8 +143,15 @@ def rebuild_vectordb(embedding_function, db_dir: str):
             persist_directory=db_dir,
         )
 
-    return Chroma.from_documents(
+    print("------------------------------------")
+    print("Creating embeddings and saving to Chroma...")
+    t0 = time.time()
+    vs = Chroma.from_documents(
         documents=all_docs,
         embedding=embedding_function,
         persist_directory=db_dir,
     )
+    embed_time = time.time() - t0
+    print("Done")
+    print(f"Time: {embed_time:.1f} sec")
+    return vs

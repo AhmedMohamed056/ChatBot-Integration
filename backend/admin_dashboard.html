@@ -157,6 +157,31 @@
     .form-grid textarea { min-height: 120px; resize: vertical; }
     .actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
     .message { color: var(--gold-soft); margin-top: 12px; min-height: 20px; }
+    .upload-stage {
+      margin-top: 14px;
+      padding: 12px 16px;
+      border-radius: 12px;
+      background: rgba(227,168,87,0.08);
+      border: 1px solid rgba(227,168,87,0.25);
+      color: var(--gold-soft);
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 20px;
+    }
+    .upload-stage .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--gold);
+      animation: pulse 1.2s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 1; }
+    }
     @media (max-width: 900px) {
       .admin-shell { grid-template-columns: 1fr; }
     }
@@ -174,6 +199,20 @@
       { id: 'reports', label: 'Reports' },
       { id: 'settings', label: 'Settings' },
     ];
+
+    // Placeholder stats used when the /admin/stats endpoint is unavailable.
+    // No backend is implemented here — these are display-only fallbacks.
+    const PLACEHOLDER_STATS = {
+      total_knowledge_files: 0,
+      total_campaigns: 0,
+      total_campaign_messages: 0,
+      total_visitor_questions: 0,
+      total_unanswered_questions: 0,
+      latest_uploaded_file: null,
+      latest_campaign_update: null,
+      latest_visitor_question: null,
+      latest_unanswered_question: null,
+    };
 
     async function apiGet(url) {
       const res = await fetch(url);
@@ -221,7 +260,7 @@
     function DashboardView() {
       const [stats, setStats] = useState(null);
       useEffect(() => {
-        apiGet('/admin/stats').then(setStats).catch(() => setStats({}));
+        apiGet('/admin/stats').then(setStats).catch(() => setStats(PLACEHOLDER_STATS));
       }, []);
 
       if (!stats) {
@@ -229,8 +268,8 @@
       }
 
       const latestItems = [
-        ['آخر تحديث حملة', stats.latest_campaign_update?.campaign_name, stats.latest_campaign_update?.created_at],
         ['آخر ملف مرفوع', stats.latest_uploaded_file?.filename, stats.latest_uploaded_file?.uploaded_at],
+        ['آخر تحديث حملة', stats.latest_campaign_update?.campaign_name, stats.latest_campaign_update?.created_at],
         ['آخر سؤال زائر', stats.latest_visitor_question?.question, stats.latest_visitor_question?.asked_at],
         ['آخر سؤال بلا إجابة', stats.latest_unanswered_question?.question, stats.latest_unanswered_question?.asked_at],
       ];
@@ -241,7 +280,7 @@
         React.createElement('div', { className: 'stats-grid' },
           React.createElement(StatCard, { label: 'Total Knowledge Files', value: stats.total_knowledge_files }),
           React.createElement(StatCard, { label: 'Total Campaigns', value: stats.total_campaigns }),
-          React.createElement(StatCard, { label: 'Total Campaign Messages', value: stats.total_campaign_messages }),
+          React.createElement(StatCard, { label: 'Total Campaign Updates', value: stats.total_campaign_messages }),
           React.createElement(StatCard, { label: 'Total Visitor Questions', value: stats.total_visitor_questions }),
           React.createElement(StatCard, { label: 'Total Unanswered Questions', value: stats.total_unanswered_questions })
         ),
@@ -257,9 +296,32 @@
       );
     }
 
+    const KB_ACCEPTED_EXTENSIONS = ['.pdf', '.docx', '.doc', '.txt', '.csv', '.xlsx'];
+    const KB_ACCEPT_ATTR = '.pdf,.docx,.doc,.txt,.csv,.xlsx';
+
+    function formatFileSize(kb) {
+      if (kb == null) return '—';
+      if (kb >= 1024) return (kb / 1024).toFixed(2) + ' MB';
+      return kb + ' KB';
+    }
+
+    function formatUploadDate(iso) {
+      if (!iso) return '—';
+      try {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return iso;
+        return d.toLocaleString();
+      } catch {
+        return iso;
+      }
+    }
+
     function KnowledgeBaseView() {
       const [files, setFiles] = useState([]);
       const [message, setMessage] = useState('');
+      const [uploading, setUploading] = useState(false);
+      const [dragging, setDragging] = useState(false);
+      const [stage, setStage] = useState('');
 
       function loadFiles() {
         apiGet('/admin/files').then((data) => setFiles(data.files || [])).catch(() => setFiles([]));
@@ -267,8 +329,26 @@
 
       useEffect(() => { loadFiles(); }, []);
 
+      function validateFile(file) {
+        if (!file) return false;
+        const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
+        if (!KB_ACCEPTED_EXTENSIONS.includes(ext)) {
+          setMessage('Unsupported file type. Supported: PDF, DOCX, DOC, TXT, CSV, XLSX');
+          return false;
+        }
+        return true;
+      }
+
       async function uploadFile(file, replaceFilename = null) {
         if (!file) return;
+        if (!validateFile(file)) return;
+        setUploading(true);
+        setMessage('');
+        setStage('Uploading...');
+        const stageTimers = [];
+        stageTimers.push(setTimeout(() => setStage('Analyzing document...'), 1500));
+        stageTimers.push(setTimeout(() => setStage('Creating AI Knowledge...'), 4000));
+        stageTimers.push(setTimeout(() => setStage('Saving knowledge base...'), 30000));
         const form = new FormData();
         form.append('file', file);
         const url = replaceFilename
@@ -276,14 +356,22 @@
           : '/upload';
         try {
           const data = await apiSend(url, 'POST', form);
+          stageTimers.forEach(clearTimeout);
+          setStage('Completed successfully.');
           setMessage(data.message || 'Uploaded successfully');
           loadFiles();
+          setTimeout(() => setStage(''), 3000);
         } catch (err) {
+          stageTimers.forEach(clearTimeout);
+          setStage('');
           setMessage(err.message || 'Upload failed');
+        } finally {
+          setUploading(false);
         }
       }
 
       async function deleteFile(filename) {
+        if (!window.confirm(`Delete "${filename}"? This will rebuild the knowledge base.`)) return;
         try {
           const data = await apiSend(`/admin/files/${encodeURIComponent(filename)}`, 'DELETE');
           setMessage(data.message || 'Deleted');
@@ -297,18 +385,33 @@
         React.createElement('h1', { className: 'page-title' }, 'Knowledge Base'),
         React.createElement('p', { className: 'subtext' }, 'ارفع الملفات ليتم فهرستها داخل نظام RAG الحالي.'),
         React.createElement('div', { className: 'card' },
-          React.createElement('div', { className: 'drop-zone' },
-            React.createElement('h3', { style: { margin: '0 0 10px', fontSize: '18px' } }, 'اسحب الملف أو اختره'),
+          React.createElement('div', {
+            className: 'drop-zone',
+            style: dragging ? { borderColor: 'var(--gold-soft)', background: 'rgba(227,168,87,0.12)' } : null,
+            onDragOver: (e) => { e.preventDefault(); setDragging(true); },
+            onDragLeave: () => setDragging(false),
+            onDrop: (e) => {
+              e.preventDefault();
+              setDragging(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) uploadFile(file);
+            }
+          },
+            React.createElement('h3', { style: { margin: '0 0 10px', fontSize: '18px' } }, uploading ? 'جاري الرفع...' : 'اسحب الملف أو اختره'),
             React.createElement('p', { className: 'muted' }, 'PDF, DOCX, DOC, TXT, CSV, XLSX'),
-            React.createElement('label', { className: 'btn', htmlFor: 'upload-input' }, 'اختيار ملف'),
+            React.createElement('label', { className: 'btn', htmlFor: 'upload-input' }, uploading ? 'Uploading...' : 'اختيار ملف'),
             React.createElement('input', {
               id: 'upload-input',
               type: 'file',
-              accept: '.pdf,.docx,.doc,.txt,.csv,.xlsx',
+              accept: KB_ACCEPT_ATTR,
               style: { display: 'none' },
               onChange: (e) => uploadFile(e.target.files?.[0])
             }),
-            React.createElement('div', { className: 'message' }, message)
+            React.createElement('div', { className: 'message' }, message),
+            uploading && stage && React.createElement('div', { className: 'upload-stage' },
+              React.createElement('span', { className: 'dot' }),
+              React.createElement('span', null, stage)
+            )
           ),
           React.createElement('table', { className: 'data-table' },
             React.createElement('thead', null,
@@ -325,15 +428,15 @@
                     React.createElement('tr', { key: item.filename },
                       React.createElement('td', null, item.filename),
                       React.createElement('td', null, item.type),
-                      React.createElement('td', null, `${item.size_kb} KB`),
-                      React.createElement('td', null, item.uploaded_at),
+                      React.createElement('td', null, formatFileSize(item.size_kb)),
+                      React.createElement('td', null, formatUploadDate(item.uploaded_at)),
                       React.createElement('td', null,
                         React.createElement('div', { className: 'actions-row' },
                           React.createElement('label', { className: 'btn secondary', htmlFor: `replace-${item.filename}`, style: { marginTop: 0, cursor: 'pointer' } }, 'Replace'),
                           React.createElement('input', {
                             id: `replace-${item.filename}`,
                             type: 'file',
-                            accept: '.pdf,.docx,.doc,.txt,.csv,.xlsx',
+                            accept: KB_ACCEPT_ATTR,
                             style: { display: 'none' },
                             onChange: (e) => uploadFile(e.target.files?.[0], item.filename)
                           }),

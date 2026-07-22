@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const puppeteer = require('puppeteer');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const logger = require('./utils/logger');
@@ -14,13 +15,23 @@ let initializationPromise = null;
 let reconnectTimer = null;
 let reconnectScheduled = false;
 
-function createClient() {
-  return new Client({
+async function createClient() {
+  console.log('[DEBUG] createClient: start');
+  // whatsapp-web.js bundles its own nested puppeteer@24.x which expects a
+  // different Chrome revision than the top-level puppeteer@25.x.  Resolve the
+  // executable from the top-level puppeteer (the one `npx puppeteer browsers
+  // install chrome` installs for) and pass it explicitly so the nested
+  // puppeteer does not look for a missing Chrome build.
+  const executablePath = await puppeteer.executablePath();
+  console.log('[DEBUG] createClient: executablePath =', executablePath);
+
+  const client = new Client({
     authStrategy: new LocalAuth({
       clientId: 'support-bot',
       dataPath: authPath,
     }),
     puppeteer: {
+      executablePath,
       headless: true,
       args: [
         '--no-sandbox',
@@ -30,23 +41,29 @@ function createClient() {
       ],
     },
   });
+  console.log('[DEBUG] createClient: Client constructed');
+  return client;
 }
 
 function attachLifecycleHandlers(client) {
   client.on('qr', (qr) => {
+    console.log('[DEBUG] qr event received');
     qrcode.generate(qr, { small: true });
     logger.info('WhatsApp QR code generated.');
   });
 
   client.once('authenticated', () => {
+    console.log('[DEBUG] authenticated event received');
     logger.info('WhatsApp authentication succeeded.');
   });
 
   client.once('ready', () => {
+    console.log('[DEBUG] ready event received');
     logger.info('WhatsApp client is ready.');
   });
 
   client.on('disconnected', (reason) => {
+    console.log('[DEBUG] disconnected event received:', reason);
     logger.warn('WhatsApp client disconnected.', {
       reason,
     });
@@ -141,7 +158,7 @@ async function startBot() {
   }
 
   initializationPromise = (async () => {
-    const client = createClient();
+    const client = await createClient();
     attachLifecycleHandlers(client);
 
     const readyPromise = new Promise((resolve, reject) => {
