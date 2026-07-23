@@ -51,7 +51,17 @@ def init_db() -> None:
                 is_active INTEGER NOT NULL DEFAULT 1,
                 FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
             );
+            """
+        )
 
+        # Migration: add supervisor_name column to campaigns if it doesn't exist
+        try:
+            conn.execute("ALTER TABLE campaigns ADD COLUMN supervisor_name TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        conn.executescript(
+            """
             CREATE TABLE IF NOT EXISTS uploaded_files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 filename TEXT NOT NULL UNIQUE,
@@ -186,6 +196,63 @@ def get_campaign_by_phone(phone: str) -> dict[str, Any] | None:
             (normalized,),
         ).fetchone()
     return row_to_dict(row)
+
+
+def list_campaigns_with_stats() -> list[dict[str, Any]]:
+    """List campaigns enriched with supervisor_name, last update time and total updates count.
+
+    Campaigns are read-only from the admin UI; this view powers the read-only
+    Campaigns page. The data itself is managed automatically by the AI from
+    WhatsApp messages.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                c.id,
+                c.name,
+                COALESCE(c.supervisor_name, '') AS supervisor_name,
+                c.whatsapp_number,
+                c.status,
+                c.created_at,
+                (
+                    SELECT MAX(cm.created_at)
+                    FROM campaign_messages cm
+                    WHERE cm.campaign_id = c.id
+                ) AS last_update,
+                (
+                    SELECT COUNT(*)
+                    FROM campaign_messages cm
+                    WHERE cm.campaign_id = c.id
+                ) AS total_updates
+            FROM campaigns c
+            ORDER BY last_update DESC NULLS LAST, c.created_at DESC
+            """
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def get_campaign_messages(campaign_id: int) -> list[dict[str, Any]]:
+    """Return all campaign update messages for a campaign, newest first."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM campaign_messages
+            WHERE campaign_id = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (campaign_id,),
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def delete_campaign_message(message_id: int) -> bool:
+    """Delete a single campaign update message. Returns True if a row was removed."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "DELETE FROM campaign_messages WHERE id = ?", (message_id,)
+        )
+    return cur.rowcount > 0
 
 
 def add_campaign_message(

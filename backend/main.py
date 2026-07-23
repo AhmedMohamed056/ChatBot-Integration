@@ -29,14 +29,17 @@ from database import (
     add_visitor_question,
     create_campaign,
     delete_campaign,
+    delete_campaign_message,
     delete_uploaded_file_record,
     get_all_settings,
     get_campaign_activity_report,
+    get_campaign_messages,
     get_dashboard_stats,
     get_top_visitor_questions,
     get_unanswered_questions,
     init_db,
     list_campaigns,
+    list_campaigns_with_stats,
     list_uploaded_files_db,
     set_setting,
     update_campaign,
@@ -929,7 +932,34 @@ async def admin_stats():
 
 @app.get("/admin/campaigns")
 async def admin_list_campaigns():
-    return {"campaigns": list_campaigns()}
+    # Read-only view: campaigns are managed automatically by the AI from
+    # WhatsApp messages. The admin UI must not create/edit/delete campaigns.
+    return {"campaigns": list_campaigns_with_stats()}
+
+
+@app.get("/admin/campaigns/{campaign_id}/messages")
+async def admin_get_campaign_messages(campaign_id: int):
+    """Return all update messages for a single campaign (newest first).
+
+    Powers the read-only campaign details panel. Campaign information itself
+    is managed automatically by the AI; only individual update messages may be
+    deleted by the admin.
+    """
+    messages = get_campaign_messages(campaign_id)
+    return {"campaign_id": campaign_id, "messages": messages}
+
+
+@app.delete("/admin/campaigns/messages/{message_id}")
+async def admin_delete_campaign_message(message_id: int):
+    """Delete a single campaign update message.
+
+    This is the ONLY write operation allowed on campaign data from the admin
+    UI. Campaigns themselves cannot be created, edited, or deleted manually.
+    """
+    deleted = delete_campaign_message(message_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Campaign update not found")
+    return {"ok": True, "message": "Campaign update deleted"}
 
 
 @app.post("/admin/campaigns")
