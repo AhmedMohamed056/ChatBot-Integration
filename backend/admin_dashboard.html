@@ -647,6 +647,20 @@
       );
     }
 
+    const CALENDAR_ACCEPTED_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.json'];
+    const CALENDAR_ACCEPT_ATTR = '.xlsx,.xls,.csv,.json';
+    const CAMPAIGN_LIST_ACCEPTED_EXTENSIONS = ['.xlsx', '.xls', '.csv'];
+    const CAMPAIGN_LIST_ACCEPT_ATTR = '.xlsx,.xls,.csv';
+
+    function validateSettingsFile(file, allowedExtensions, label) {
+      if (!file) return false;
+      const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
+      if (!allowedExtensions.includes(ext)) {
+        return false;
+      }
+      return true;
+    }
+
     function SettingsView() {
       const [settings, setSettings] = useState({
         assistant_name: '',
@@ -655,6 +669,10 @@
         campaign_list_file: '',
       });
       const [message, setMessage] = useState('');
+      const [calendarUploading, setCalendarUploading] = useState(false);
+      const [calendarDragging, setCalendarDragging] = useState(false);
+      const [campaignUploading, setCampaignUploading] = useState(false);
+      const [campaignDragging, setCampaignDragging] = useState(false);
 
       useEffect(() => {
         apiGet('/admin/settings').then(setSettings).catch(() => {});
@@ -663,8 +681,12 @@
       async function saveSettings(e) {
         e.preventDefault();
         try {
-          const data = await apiSend('/admin/settings', 'PUT', settings);
-          setSettings(data.settings || settings);
+          const payload = {
+            assistant_name: settings.assistant_name || '',
+            system_prompt: settings.system_prompt || '',
+          };
+          const data = await apiSend('/admin/settings', 'PUT', payload);
+          setSettings((prev) => ({ ...prev, ...data.settings }));
           setMessage('Settings saved');
         } catch (err) {
           setMessage(err.message || 'Save failed');
@@ -673,6 +695,12 @@
 
       async function uploadCalendar(file) {
         if (!file) return;
+        if (!validateSettingsFile(file, CALENDAR_ACCEPTED_EXTENSIONS)) {
+          setMessage('Unsupported calendar file type. Supported: XLSX, XLS, CSV, JSON');
+          return;
+        }
+        setCalendarUploading(true);
+        setMessage('');
         const form = new FormData();
         form.append('file', file);
         try {
@@ -681,11 +709,19 @@
           setMessage(data.message || 'Calendar uploaded');
         } catch (err) {
           setMessage(err.message || 'Upload failed');
+        } finally {
+          setCalendarUploading(false);
         }
       }
 
       async function uploadCampaignList(file) {
         if (!file) return;
+        if (!validateSettingsFile(file, CAMPAIGN_LIST_ACCEPTED_EXTENSIONS)) {
+          setMessage('Unsupported campaign list file type. Supported: XLSX, XLS, CSV');
+          return;
+        }
+        setCampaignUploading(true);
+        setMessage('');
         const form = new FormData();
         form.append('file', file);
         try {
@@ -694,13 +730,15 @@
           setMessage(data.message || 'Campaign list uploaded');
         } catch (err) {
           setMessage(err.message || 'Upload failed');
+        } finally {
+          setCampaignUploading(false);
         }
       }
 
       return React.createElement('div', null,
         React.createElement('h1', { className: 'page-title' }, 'Settings'),
         React.createElement('p', { className: 'subtext' }, 'إعدادات المساعد والتقويم.'),
-        React.createElement('div', { className: 'card' },
+        React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
           React.createElement('form', { className: 'form-grid', onSubmit: saveSettings },
             React.createElement('label', null, 'Assistant Name',
               React.createElement('input', {
@@ -714,32 +752,67 @@
                 onChange: (e) => setSettings({ ...settings, system_prompt: e.target.value })
               })
             ),
-            React.createElement('label', null, 'Calendar File',
-              React.createElement('input', { value: settings.calendar_file || '', readOnly: true })
-            ),
-            React.createElement('label', null, 'Upload Calendar File',
-              React.createElement('input', {
-                type: 'file',
-                accept: '.json,.txt,.csv',
-                onChange: (e) => uploadCalendar(e.target.files?.[0])
-              })
-            ),
-            React.createElement('label', null, 'Campaign List File',
-              React.createElement('input', {
-                value: settings.campaign_list_file || '',
-                readOnly: true
-              })
-            ),
-            React.createElement('label', null, 'Upload Campaign List File',
-              React.createElement('input', {
-                type: 'file',
-                accept: '.json,.txt,.csv',
-                onChange: (e) => uploadCampaignList(e.target.files?.[0])
-              })
-            ),
             React.createElement('button', { className: 'btn', type: 'submit' }, 'Save Settings'),
             React.createElement('div', { className: 'message' }, message)
           )
+        ),
+        React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
+          React.createElement('h2', { style: { marginTop: 0 } }, 'Calendar File'),
+          React.createElement('p', { className: 'muted' }, 'رفع تقويم هجري مخصص. المدعوم: Excel, CSV, JSON'),
+          React.createElement('div', {
+            className: 'drop-zone',
+            style: calendarDragging ? { borderColor: 'var(--gold-soft)', background: 'rgba(227,168,87,0.12)' } : null,
+            onDragOver: (e) => { e.preventDefault(); setCalendarDragging(true); },
+            onDragLeave: () => setCalendarDragging(false),
+            onDrop: (e) => {
+              e.preventDefault();
+              setCalendarDragging(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) uploadCalendar(file);
+            }
+          },
+            React.createElement('h3', { style: { margin: '0 0 10px', fontSize: '18px' } }, calendarUploading ? 'جاري الرفع...' : 'اسحب الملف أو اختره'),
+            React.createElement('p', { className: 'muted' }, 'XLSX, XLS, CSV, JSON'),
+            React.createElement('label', { className: 'btn', htmlFor: 'calendar-upload-input' }, calendarUploading ? 'Uploading...' : 'اختيار ملف'),
+            React.createElement('input', {
+              id: 'calendar-upload-input',
+              type: 'file',
+              accept: CALENDAR_ACCEPT_ATTR,
+              style: { display: 'none' },
+              onChange: (e) => uploadCalendar(e.target.files?.[0])
+            })
+          ),
+          React.createElement('div', { className: 'label', style: { marginTop: '14px' } }, 'Current Calendar File'),
+          React.createElement('div', { style: { color: 'var(--sand)' } }, settings.calendar_file || '—')
+        ),
+        React.createElement('div', { className: 'card' },
+          React.createElement('h2', { style: { marginTop: 0 } }, 'Campaign List File'),
+          React.createElement('p', { className: 'muted' }, 'رفع قائمة الحملات. المدعوم: Excel, CSV'),
+          React.createElement('div', {
+            className: 'drop-zone',
+            style: campaignDragging ? { borderColor: 'var(--gold-soft)', background: 'rgba(227,168,87,0.12)' } : null,
+            onDragOver: (e) => { e.preventDefault(); setCampaignDragging(true); },
+            onDragLeave: () => setCampaignDragging(false),
+            onDrop: (e) => {
+              e.preventDefault();
+              setCampaignDragging(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) uploadCampaignList(file);
+            }
+          },
+            React.createElement('h3', { style: { margin: '0 0 10px', fontSize: '18px' } }, campaignUploading ? 'جاري الرفع...' : 'اسحب الملف أو اختره'),
+            React.createElement('p', { className: 'muted' }, 'XLSX, XLS, CSV'),
+            React.createElement('label', { className: 'btn', htmlFor: 'campaign-list-upload-input' }, campaignUploading ? 'Uploading...' : 'اختيار ملف'),
+            React.createElement('input', {
+              id: 'campaign-list-upload-input',
+              type: 'file',
+              accept: CAMPAIGN_LIST_ACCEPT_ATTR,
+              style: { display: 'none' },
+              onChange: (e) => uploadCampaignList(e.target.files?.[0])
+            })
+          ),
+          React.createElement('div', { className: 'label', style: { marginTop: '14px' } }, 'Current Campaign List File'),
+          React.createElement('div', { style: { color: 'var(--sand)' } }, settings.campaign_list_file || '—')
         )
       );
     }
