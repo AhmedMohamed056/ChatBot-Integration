@@ -182,6 +182,74 @@
       0%, 100% { opacity: 0.4; }
       50% { opacity: 1; }
     }
+    .campaign-row { cursor: pointer; transition: background 0.15s; }
+    .campaign-row:hover { background: rgba(227,168,87,0.08); }
+    .campaign-row.selected { background: rgba(227,168,87,0.14); }
+    .status-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .status-active { background: rgba(95,176,120,0.18); color: #7fd49a; border: 1px solid rgba(95,176,120,0.35); }
+    .status-inactive { background: rgba(159,184,179,0.15); color: var(--sage); border: 1px solid var(--line); }
+    .details-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      z-index: 50;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .details-panel {
+      width: min(720px, 100%);
+      height: 100%;
+      background: linear-gradient(160deg, var(--panel-2), var(--panel));
+      border-left: 1px solid var(--line);
+      overflow-y: auto;
+      padding: 24px;
+      box-shadow: -20px 0 60px -20px rgba(0,0,0,0.6);
+    }
+    .details-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; }
+    .details-close {
+      background: transparent;
+      border: 1px solid var(--line);
+      color: var(--sand);
+      border-radius: 999px;
+      width: 36px; height: 36px;
+      cursor: pointer;
+      font-size: 18px;
+    }
+    .update-card {
+      background: rgba(244,239,230,0.04);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .update-meta { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .meta-chip {
+      font-size: 12px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: rgba(227,168,87,0.10);
+      color: var(--gold-soft);
+      border: 1px solid rgba(227,168,87,0.22);
+    }
+    .update-section { margin-bottom: 12px; }
+    .update-section .section-label { color: var(--sage); font-size: 12px; margin-bottom: 4px; }
+    .update-section .section-value { color: var(--sand); font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+    .readonly-banner {
+      background: rgba(227,168,87,0.08);
+      border: 1px solid rgba(227,168,87,0.25);
+      border-radius: 12px;
+      padding: 12px 16px;
+      color: var(--gold-soft);
+      font-size: 13px;
+      margin-bottom: 18px;
+      line-height: 1.7;
+    }
     @media (max-width: 900px) {
       .admin-shell { grid-template-columns: 1fr; }
     }
@@ -455,110 +523,158 @@
       );
     }
 
+    function StatusBadge({ status }) {
+      const cls = status === 'active' ? 'status-active' : 'status-inactive';
+      return React.createElement('span', { className: `status-badge ${cls}` }, status || '—');
+    }
+
+    function CampaignDetailsPanel({ campaign, onClose, onMessageDeleted }) {
+      const [messages, setMessages] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [deletingId, setDeletingId] = useState(null);
+
+      function loadMessages() {
+        setLoading(true);
+        setError('');
+        apiGet(`/admin/campaigns/${campaign.id}/messages`)
+          .then((data) => setMessages(data.messages || []))
+          .catch(() => { setMessages([]); setError('Failed to load updates'); })
+          .finally(() => setLoading(false));
+      }
+
+      useEffect(() => { loadMessages(); }, [campaign.id]);
+
+      async function deleteMessage(messageId) {
+        if (!window.confirm('Delete this campaign update? This cannot be undone.')) return;
+        setDeletingId(messageId);
+        try {
+          await apiSend(`/admin/campaigns/messages/${messageId}`, 'DELETE');
+          setMessages((prev) => (prev || []).filter((m) => m.id !== messageId));
+          if (onMessageDeleted) onMessageDeleted();
+        } catch (err) {
+          setError(err.message || 'Delete failed');
+        } finally {
+          setDeletingId(null);
+        }
+      }
+
+      return React.createElement('div', { className: 'details-overlay', onClick: onClose },
+        React.createElement('div', { className: 'details-panel', onClick: (e) => e.stopPropagation() },
+          React.createElement('div', { className: 'details-header' },
+            React.createElement('div', null,
+              React.createElement('h2', { style: { margin: '0 0 6px' } }, campaign.name),
+              React.createElement('div', { className: 'muted' },
+                'Supervisor: ', campaign.supervisor_name || '—',
+                ' · WhatsApp: ', campaign.whatsapp_number
+              )
+            ),
+            React.createElement('button', { className: 'details-close', onClick: onClose, 'aria-label': 'Close' }, '×')
+          ),
+          React.createElement('div', { className: 'readonly-banner' },
+            'هذه الحملة تُدار تلقائيًا بواسطة الذكاء الاصطناعي من رسائل واتساب. لا يمكن إنشاء أو تعديل أو حذف الحملة يدويًا. يُسمح فقط بحذف التحديثات الفردية.'
+          ),
+          error && React.createElement('div', { className: 'message' }, error),
+          loading
+            ? React.createElement('div', { className: 'muted' }, 'جاري تحميل التحديثات...')
+            : (messages && messages.length === 0
+                ? React.createElement('div', { className: 'muted' }, 'لا توجد تحديثات لهذه الحملة.')
+                : React.createElement('div', null,
+                    React.createElement('div', { className: 'label', style: { marginBottom: '12px' } },
+                      `Latest Updates (${messages ? messages.length : 0})`
+                    ),
+                    (messages || []).map((m) =>
+                      React.createElement('div', { className: 'update-card', key: m.id },
+                        React.createElement('div', { className: 'update-meta' },
+                          m.event_date && React.createElement('span', { className: 'meta-chip' }, `Event: ${m.event_date}`),
+                          m.expires_at && React.createElement('span', { className: 'meta-chip' }, `Expires: ${m.expires_at}`),
+                          React.createElement('span', { className: 'meta-chip' }, `Created: ${formatUploadDate(m.created_at)}`),
+                          m.is_active === 0 && React.createElement('span', { className: 'meta-chip' }, 'Inactive')
+                        ),
+                        React.createElement('div', { className: 'update-section' },
+                          React.createElement('div', { className: 'section-label' }, 'Extracted Information'),
+                          React.createElement('div', { className: 'section-value' }, m.extracted_info || '—')
+                        ),
+                        React.createElement('div', { className: 'update-section' },
+                          React.createElement('div', { className: 'section-label' }, 'Original Message'),
+                          React.createElement('div', { className: 'section-value' }, m.original_message || '—')
+                        ),
+                        React.createElement('div', { className: 'update-section' },
+                          React.createElement('div', { className: 'section-label' }, 'Date'),
+                          React.createElement('div', { className: 'section-value' }, m.event_date || formatUploadDate(m.created_at))
+                        ),
+                        React.createElement('div', { className: 'actions-row' },
+                          React.createElement('button', {
+                            className: 'btn secondary danger',
+                            style: { marginTop: 0 },
+                            disabled: deletingId === m.id,
+                            onClick: () => deleteMessage(m.id)
+                          }, deletingId === m.id ? 'Deleting...' : 'Delete Update')
+                        )
+                      )
+                    )
+                  )
+            )
+        )
+      );
+    }
+
     function CampaignsView() {
       const [campaigns, setCampaigns] = useState([]);
-      const [form, setForm] = useState({ name: '', whatsapp_number: '', status: 'active' });
-      const [editingId, setEditingId] = useState(null);
-      const [message, setMessage] = useState('');
+      const [selected, setSelected] = useState(null);
+      const [loading, setLoading] = useState(true);
 
       function loadCampaigns() {
-        apiGet('/admin/campaigns').then((data) => setCampaigns(data.campaigns || [])).catch(() => setCampaigns([]));
+        setLoading(true);
+        apiGet('/admin/campaigns')
+          .then((data) => setCampaigns(data.campaigns || []))
+          .catch(() => setCampaigns([]))
+          .finally(() => setLoading(false));
       }
 
       useEffect(() => { loadCampaigns(); }, []);
 
-      async function saveCampaign(e) {
-        e.preventDefault();
-        try {
-          if (editingId) {
-            await apiSend(`/admin/campaigns/${editingId}`, 'PUT', form);
-            setMessage('Campaign updated');
-          } else {
-            await apiSend('/admin/campaigns', 'POST', form);
-            setMessage('Campaign created');
-          }
-          setForm({ name: '', whatsapp_number: '', status: 'active' });
-          setEditingId(null);
-          loadCampaigns();
-        } catch (err) {
-          setMessage(err.message || 'Save failed');
-        }
-      }
-
-      async function deleteCampaign(id) {
-        try {
-          await apiSend(`/admin/campaigns/${id}`, 'DELETE');
-          setMessage('Campaign deleted');
-          loadCampaigns();
-        } catch (err) {
-          setMessage(err.message || 'Delete failed');
-        }
-      }
-
-      function startEdit(campaign) {
-        setEditingId(campaign.id);
-        setForm({
-          name: campaign.name,
-          whatsapp_number: campaign.whatsapp_number,
-          status: campaign.status,
-        });
-      }
+      const columns = ['Campaign Name', 'Supervisor Name', 'WhatsApp Number', 'Last Update', 'Total Updates', 'Status'];
 
       return React.createElement('div', null,
         React.createElement('h1', { className: 'page-title' }, 'Campaigns'),
-        React.createElement('p', { className: 'subtext' }, 'إدارة الحملات المرتبطة بأرقام واتساب.'),
-        React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
-          React.createElement('form', { className: 'form-grid', onSubmit: saveCampaign },
-            React.createElement('label', null, 'Campaign Name',
-              React.createElement('input', { value: form.name, onChange: (e) => setForm({ ...form, name: e.target.value }), required: true })
-            ),
-            React.createElement('label', null, 'WhatsApp Number',
-              React.createElement('input', { value: form.whatsapp_number, onChange: (e) => setForm({ ...form, whatsapp_number: e.target.value }), required: true })
-            ),
-            React.createElement('label', null, 'Status',
-              React.createElement('select', { value: form.status, onChange: (e) => setForm({ ...form, status: e.target.value }) },
-                React.createElement('option', { value: 'active' }, 'active'),
-                React.createElement('option', { value: 'inactive' }, 'inactive')
-              )
-            ),
-            React.createElement('div', { className: 'actions-row' },
-              React.createElement('button', { className: 'btn', type: 'submit' }, editingId ? 'Update Campaign' : 'Add Campaign'),
-              editingId && React.createElement('button', {
-                className: 'btn secondary',
-                type: 'button',
-                onClick: () => { setEditingId(null); setForm({ name: '', whatsapp_number: '', status: 'active' }); }
-              }, 'Cancel')
-            ),
-            React.createElement('div', { className: 'message' }, message)
-          )
+        React.createElement('p', { className: 'subtext' }, 'عرض الحملات الموجودة في النظام. تُدار الحملات تلقائيًا بواسطة الذكاء الاصطناعي من رسائل واتساب — هذه الصفحة للقراءة فقط.'),
+        React.createElement('div', { className: 'readonly-banner' },
+          'لا يمكن إنشاء أو تعديل أو حذف الحملات يدويًا. اضغط على حملة لعرض تفاصيل تحديثاتها.'
         ),
         React.createElement('table', { className: 'data-table' },
           React.createElement('thead', null,
             React.createElement('tr', null,
-              ['Campaign Name', 'WhatsApp Number', 'Status', 'Created Date', 'Actions'].map((h) =>
-                React.createElement('th', { key: h }, h)
-              )
+              columns.map((h) => React.createElement('th', { key: h }, h))
             )
           ),
           React.createElement('tbody', null,
-            campaigns.length === 0
-              ? React.createElement('tr', null, React.createElement('td', { colSpan: 5 }, 'No campaigns yet.'))
-              : campaigns.map((item) =>
-                  React.createElement('tr', { key: item.id },
-                    React.createElement('td', null, item.name),
-                    React.createElement('td', null, item.whatsapp_number),
-                    React.createElement('td', null, item.status),
-                    React.createElement('td', null, item.created_at),
-                    React.createElement('td', null,
-                      React.createElement('div', { className: 'actions-row' },
-                        React.createElement('button', { className: 'btn secondary', style: { marginTop: 0 }, onClick: () => startEdit(item) }, 'Edit'),
-                        React.createElement('button', { className: 'btn secondary danger', style: { marginTop: 0 }, onClick: () => deleteCampaign(item.id) }, 'Delete')
+            loading
+              ? React.createElement('tr', null, React.createElement('td', { colSpan: columns.length }, 'جاري تحميل الحملات...'))
+              : (campaigns.length === 0
+                  ? React.createElement('tr', null, React.createElement('td', { colSpan: columns.length }, 'No campaigns yet.'))
+                  : campaigns.map((item) =>
+                      React.createElement('tr', {
+                        key: item.id,
+                        className: `campaign-row ${selected && selected.id === item.id ? 'selected' : ''}`,
+                        onClick: () => setSelected(item)
+                      },
+                        React.createElement('td', null, item.name),
+                        React.createElement('td', null, item.supervisor_name || '—'),
+                        React.createElement('td', null, item.whatsapp_number),
+                        React.createElement('td', null, formatUploadDate(item.last_update)),
+                        React.createElement('td', null, item.total_updates ?? 0),
+                        React.createElement('td', null, React.createElement(StatusBadge, { status: item.status }))
                       )
                     )
-                  )
-                )
           )
         )
+        ),
+        selected && React.createElement(CampaignDetailsPanel, {
+          campaign: selected,
+          onClose: () => setSelected(null),
+          onMessageDeleted: loadCampaigns
+        })
       );
     }
 
