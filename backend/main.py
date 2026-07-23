@@ -70,6 +70,10 @@ CALENDAR_DIR = str(BACKEND_DIR / "calendar_files")
 os.makedirs(STATIC_PDF_DIR, exist_ok=True)
 os.makedirs(CALENDAR_DIR, exist_ok=True)
 
+# Allowed file extensions for settings uploads
+CALENDAR_ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv", ".json"}
+CAMPAIGN_LIST_ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+
 app = FastAPI()
 
 app.add_middleware(
@@ -119,7 +123,6 @@ class CampaignUpdateRequest(BaseModel):
 class SettingsUpdateRequest(BaseModel):
     assistant_name: str | None = None
     system_prompt: str | None = None
-    campaign_list_file: str | None = None
 
 
 def list_supported_documents() -> list[dict]:
@@ -192,6 +195,24 @@ def get_assistant_name() -> str:
 def get_custom_system_prompt() -> str:
     settings = get_all_settings()
     return settings.get("system_prompt") or ""
+
+
+def get_filename_from_path(path_str: str) -> str:
+    """Extract just the filename from a stored file path."""
+    if not path_str:
+        return ""
+    try:
+        return Path(path_str).name
+    except Exception:
+        return path_str
+
+
+def get_settings_for_display() -> dict[str, str]:
+    """Return settings with file paths converted to filenames for display."""
+    settings = get_all_settings()
+    settings["calendar_file"] = get_filename_from_path(settings.get("calendar_file", ""))
+    settings["campaign_list_file"] = get_filename_from_path(settings.get("campaign_list_file", ""))
+    return settings
 
 
 def build_qa_chain_from_vectordb(db):
@@ -951,7 +972,7 @@ async def admin_visitor_questions_report():
 
 @app.get("/admin/settings")
 async def admin_get_settings():
-    return get_all_settings()
+    return get_settings_for_display()
 
 
 @app.put("/admin/settings")
@@ -960,19 +981,25 @@ async def admin_update_settings(req: SettingsUpdateRequest):
         set_setting("assistant_name", req.assistant_name)
     if req.system_prompt is not None:
         set_setting("system_prompt", req.system_prompt)
-    if req.campaign_list_file is not None:
-        set_setting("campaign_list_file", req.campaign_list_file)
 
     global qa_chain
     if qa_chain is not None:
         qa_chain = build_qa_chain_from_vectordb(vectordb)
 
-    return {"ok": True, "settings": get_all_settings()}
+    return {"ok": True, "settings": get_settings_for_display()}
 
 
 @app.post("/admin/settings/calendar")
 async def admin_upload_calendar(file: UploadFile = File(...)):
     filename = Path(file.filename or "calendar.json").name
+    suffix = Path(filename).suffix.lower()
+
+    if suffix not in CALENDAR_ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Supported calendar file types: XLSX, XLS, CSV, JSON.",
+        )
+
     dest = Path(CALENDAR_DIR) / filename
 
     try:
@@ -983,14 +1010,22 @@ async def admin_upload_calendar(file: UploadFile = File(...)):
     set_setting("calendar_file", str(dest))
     return {
         "ok": True,
-        "calendar_file": str(dest),
+        "calendar_file": filename,
         "message": "Calendar file uploaded successfully",
     }
 
 
 @app.post("/admin/settings/campaign-list")
 async def admin_upload_campaign_list(file: UploadFile = File(...)):
-    filename = Path(file.filename or "campaign_list.json").name
+    filename = Path(file.filename or "campaign_list.xlsx").name
+    suffix = Path(filename).suffix.lower()
+
+    if suffix not in CAMPAIGN_LIST_ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Supported campaign list file types: XLSX, XLS, CSV.",
+        )
+
     dest = Path(CALENDAR_DIR) / filename
 
     try:
@@ -1001,7 +1036,7 @@ async def admin_upload_campaign_list(file: UploadFile = File(...)):
     set_setting("campaign_list_file", str(dest))
     return {
         "ok": True,
-        "campaign_list_file": str(dest),
+        "campaign_list_file": filename,
         "message": "Campaign list file uploaded successfully",
     }
 
