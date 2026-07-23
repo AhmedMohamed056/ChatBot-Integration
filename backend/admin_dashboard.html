@@ -678,17 +678,48 @@
       );
     }
 
+    // Placeholder report data used when the /admin/reports/* endpoints are unavailable.
+    // No backend is implemented here — these are display-only fallbacks.
+    const PLACEHOLDER_CAMPAIGN_ACTIVITY = [
+      { campaign: 'Summer Promo 2026', last_update: '2026-07-22 14:30', last_message: 'New discount code SUMMER25 available for all customers this week', extracted_info: 'Discount: 25% · Code: SUMMER25 · Valid until: 2026-08-31', date: '2026-07-22' },
+      { campaign: 'Eid Al-Adha Campaign', last_update: '2026-07-20 09:12', last_message: 'Store will be closed for Eid holidays from July 21 to July 25', extracted_info: 'Holiday closure: 2026-07-21 to 2026-07-25', date: '2026-07-20' },
+      { campaign: 'Back to School Drive', last_update: '2026-07-18 16:45', last_message: 'Bundle offer on school supplies — buy 2 get 1 free', extracted_info: 'Promo: Buy 2 Get 1 Free · Category: School Supplies', date: '2026-07-18' },
+      { campaign: 'Weekend Flash Sale', last_update: '2026-07-15 18:00', last_message: 'Flash sale this weekend only — up to 40% off electronics', extracted_info: 'Discount: Up to 40% · Category: Electronics · Weekend only', date: '2026-07-15' },
+    ];
+
+    const PLACEHOLDER_TOP_QUESTIONS = [
+      { question: 'What are your working hours?', question_count: 142 },
+      { question: 'How do I track my order?', question_count: 98 },
+      { question: 'What is your return policy?', question_count: 76 },
+      { question: 'Do you offer free shipping?', question_count: 64 },
+      { question: 'How can I contact customer support?', question_count: 51 },
+    ];
+
+    const PLACEHOLDER_UNANSWERED = [
+      { question: 'Can I get a refund after 30 days?', asked_at: '2026-07-22 10:15' },
+      { question: 'Do you have installment payment options?', asked_at: '2026-07-21 15:42' },
+      { question: 'Is the summer discount applicable to already discounted items?', asked_at: '2026-07-20 12:08' },
+      { question: 'Can I change my delivery address after placing the order?', asked_at: '2026-07-19 09:33' },
+    ];
+
     function ReportsView() {
       const [campaignReport, setCampaignReport] = useState([]);
       const [topQuestions, setTopQuestions] = useState([]);
       const [unanswered, setUnanswered] = useState([]);
 
       useEffect(() => {
-        apiGet('/admin/reports/campaign-activity').then((d) => setCampaignReport(d.items || [])).catch(() => setCampaignReport([]));
-        apiGet('/admin/reports/visitor-questions').then((d) => {
-          setTopQuestions(d.top_questions || []);
-          setUnanswered(d.unanswered || []);
-        }).catch(() => {});
+        apiGet('/admin/reports/campaign-activity')
+          .then((d) => setCampaignReport(d.items || []))
+          .catch(() => setCampaignReport(PLACEHOLDER_CAMPAIGN_ACTIVITY));
+        apiGet('/admin/reports/visitor-questions')
+          .then((d) => {
+            setTopQuestions(d.top_questions || []);
+            setUnanswered(d.unanswered || []);
+          })
+          .catch(() => {
+            setTopQuestions(PLACEHOLDER_TOP_QUESTIONS);
+            setUnanswered(PLACEHOLDER_UNANSWERED);
+          });
       }, []);
 
       return React.createElement('div', null,
@@ -699,17 +730,18 @@
           React.createElement('table', { className: 'data-table' },
             React.createElement('thead', null,
               React.createElement('tr', null,
-                ['Campaign', 'Last Message', 'Extracted Information', 'Date'].map((h) =>
+                ['Campaign', 'Last Update', 'Last Message', 'Extracted Information', 'Date'].map((h) =>
                   React.createElement('th', { key: h }, h)
                 )
               )
             ),
             React.createElement('tbody', null,
               campaignReport.length === 0
-                ? React.createElement('tr', null, React.createElement('td', { colSpan: 4 }, 'No campaign activity yet.'))
+                ? React.createElement('tr', null, React.createElement('td', { colSpan: 5 }, 'No campaign activity yet.'))
                 : campaignReport.map((item, idx) =>
                     React.createElement('tr', { key: idx },
                       React.createElement('td', null, item.campaign),
+                      React.createElement('td', null, item.last_update),
                       React.createElement('td', null, item.last_message),
                       React.createElement('td', null, item.extracted_info),
                       React.createElement('td', null, item.date)
