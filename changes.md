@@ -1,3 +1,85 @@
+# Task 2 — Admin Settings System
+
+## Summary
+
+Implemented a complete **Settings System** for the Admin Panel. The Settings page is the central control center where the administrator configures the chatbot: general info, AI, campaign/calendar file uploads, prompt templates, WhatsApp settings, and security. All secrets are masked in API responses. File uploads are validated (extension + size) and registered in the existing `uploaded_files` table. No Excel/calendar parsing, WhatsApp logic, or AI processing is implemented in this task.
+
+---
+
+## Files Modified
+
+### 1. `backend/main.py`
+- **Endpoint path fixes**: Renamed `POST /admin/settings/calendar` → `POST /admin/settings/upload/calendar` and `POST /admin/settings/campaign-list` → `POST /admin/settings/upload/campaign` to match the required API spec.
+- **Settings endpoints** (already present, verified):
+  - `GET /admin/settings` — returns all settings with secrets masked and file paths converted to filenames.
+  - `PUT /admin/settings` — updates general, AI, WhatsApp, and security settings. Ignores masked API-key placeholders so secrets are not overwritten accidentally.
+  - `GET /admin/settings/prompts` — returns all prompt templates.
+  - `PUT /admin/settings/prompts` — updates system/campaign/visitor/update prompts.
+  - `POST /admin/settings/change-password` — verifies current password (DB or env), enforces min length 6, stores new hash.
+  - `POST /admin/settings/upload/calendar` — validates extension (xlsx/xls/csv/json), saves to `calendar_files/`, enforces 10 MB max, registers in `uploaded_files`, stores path in `settings.calendar_file`.
+  - `POST /admin/settings/upload/campaign` — validates extension (xlsx/xls/csv), saves to `calendar_files/`, enforces 10 MB max, registers in `uploaded_files`, stores path in `settings.campaign_list_file`.
+- **Validation**: file extension, file size (10 MB), missing required values, duplicate uploads (upsert replaces old record with same filename).
+- **Secrets**: `gemini_api_key` is stored but returned masked (`••••••••`) via `mask_secret()`.
+
+### 2. `backend/admin_dashboard.html`
+- **Updated upload API calls** to use the new `/admin/settings/upload/calendar` and `/admin/settings/upload/campaign` paths.
+- **SettingsView** (already present, verified) renders 7 grouped cards:
+  1. General Settings (organization, mosque, language, timezone, country, city)
+  2. AI Settings (Gemini API key as password, model, temperature, max tokens)
+  3. Campaign Files (drag-drop upload, current file + upload date + size)
+  4. Calendar File (drag-drop upload, current file + upload date + size)
+  5. Prompt Configuration (system/campaign/visitor/update prompts)
+  6. WhatsApp Settings (bot number, welcome message, fallback message)
+  7. Security (change password, session timeout)
+- **UI features**: loading indicators, success/error messages, Save + Reset buttons, file validation (extension + size) on the client.
+
+### 3. `backend/database.py`
+- Already contains the required tables and functions (verified):
+  - `system_settings` (key/value settings)
+  - `prompt_templates` (named prompt templates)
+  - `admin_users` (password change)
+  - `uploaded_files` (reused for campaign/calendar files)
+  - Functions: `get_all_settings`, `set_setting`, `get_all_prompts`, `set_prompt`, `get_admin_user`, `change_admin_password`, `upsert_uploaded_file`, `list_uploaded_files_db`, `delete_uploaded_file_record`, `get_uploaded_file_by_filename`.
+
+---
+
+## Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/admin/settings` | Return all settings (secrets masked) |
+| `PUT` | `/admin/settings` | Update general/AI/WhatsApp/security settings |
+| `GET` | `/admin/settings/prompts` | Return all prompt templates |
+| `PUT` | `/admin/settings/prompts` | Update prompt templates |
+| `POST` | `/admin/settings/upload/campaign` | Upload + register campaign Excel/CSV |
+| `POST` | `/admin/settings/upload/calendar` | Upload + register calendar file |
+| `POST` | `/admin/settings/change-password` | Change admin password |
+
+---
+
+## Validation
+
+- **Missing API key**: handled — key is optional; masked placeholder is never saved.
+- **Wrong file type**: rejected with 400 (calendar: xlsx/xls/csv/json; campaign: xlsx/xls/csv).
+- **Large files**: rejected with 413 (max 10 MB).
+- **Duplicate uploads**: upsert replaces the old `uploaded_files` record with the same filename.
+- **Missing required values**: password min length 6 enforced server-side; client-side validation for file size/type.
+
+---
+
+## What was NOT implemented (per task scope)
+
+- Excel parsing, calendar parsing, campaign import, WhatsApp processing, AI extraction, reports, relative dates, calendar engine, prayer engine.
+
+---
+
+## Verification
+
+- Integration test confirmed: all tables exist, settings/prompts round-trip, password change, uploaded_files upsert/replace/delete all work.
+- Route listing confirmed all 7 settings endpoints are registered with the correct paths.
+
+---
+
 # Campaigns Page — Read-Only Implementation
 
 ## Summary

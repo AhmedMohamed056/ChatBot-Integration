@@ -1,5 +1,6 @@
 import asyncio
 import os
+import secrets
 import shutil
 import sys
 import time
@@ -27,23 +28,31 @@ from langchain_core.documents import Document
 from campaign_service import build_active_campaign_context, process_campaign_update
 from database import (
     add_visitor_question,
+    change_admin_password,
     create_campaign,
     delete_campaign,
     delete_campaign_message,
     delete_uploaded_file_record,
+    get_admin_user,
+    get_all_prompts,
     get_all_settings,
     get_campaign_activity_report,
     get_campaign_messages,
     get_dashboard_stats,
+    get_prompt,
     get_top_visitor_questions,
     get_unanswered_questions,
+    get_uploaded_file_by_filename,
+    hash_password,
     init_db,
     list_campaigns,
     list_campaigns_with_stats,
     list_uploaded_files_db,
+    set_prompt,
     set_setting,
     update_campaign,
     upsert_uploaded_file,
+    verify_password,
 )
 from date_utils import format_datetime_context_block
 from document_service import (
@@ -76,6 +85,31 @@ os.makedirs(CALENDAR_DIR, exist_ok=True)
 # Allowed file extensions for settings uploads
 CALENDAR_ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv", ".json"}
 CAMPAIGN_LIST_ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+
+# Maximum upload size for settings files (10 MB)
+MAX_SETTINGS_FILE_SIZE_BYTES = 10 * 1024 * 1024
+
+# Settings keys that may be updated via the PUT /admin/settings endpoint.
+# Secrets (gemini_api_key) are handled separately and never returned in full.
+UPDATABLE_SETTING_KEYS = {
+    "assistant_name",
+    "organization_name",
+    "mosque_name",
+    "default_language",
+    "timezone",
+    "country",
+    "city",
+    "ai_model",
+    "ai_temperature",
+    "ai_max_tokens",
+    "whatsapp_bot_number",
+    "whatsapp_welcome_message",
+    "whatsapp_fallback_message",
+    "session_timeout_minutes",
+}
+
+# Settings keys considered secret and masked in API responses
+SECRET_SETTING_KEYS = {"gemini_api_key"}
 
 app = FastAPI()
 
@@ -124,8 +158,39 @@ class CampaignUpdateRequest(BaseModel):
 
 
 class SettingsUpdateRequest(BaseModel):
+    # General
     assistant_name: str | None = None
+    organization_name: str | None = None
+    mosque_name: str | None = None
+    default_language: str | None = None
+    timezone: str | None = None
+    country: str | None = None
+    city: str | None = None
+    # AI
+    gemini_api_key: str | None = None
+    ai_model: str | None = None
+    ai_temperature: str | None = None
+    ai_max_tokens: str | None = None
+    # WhatsApp
+    whatsapp_bot_number: str | None = None
+    whatsapp_welcome_message: str | None = None
+    whatsapp_fallback_message: str | None = None
+    # Security
+    session_timeout_minutes: str | None = None
+    # Legacy prompt (kept for backward compatibility; prefer /admin/settings/prompts)
     system_prompt: str | None = None
+
+
+class PromptsUpdateRequest(BaseModel):
+    system_prompt: str | None = None
+    campaign_prompt: str | None = None
+    visitor_prompt: str | None = None
+    update_prompt: str | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
 def list_supported_documents() -> list[dict]:
@@ -210,11 +275,25 @@ def get_filename_from_path(path_str: str) -> str:
         return path_str
 
 
+def mask_secret(value: str) -> str:
+    """Mask a secret value, showing only whether it is set."""
+    if not value:
+        return ""
+    return "••••••••"
+
+
 def get_settings_for_display() -> dict[str, str]:
-    """Return settings with file paths converted to filenames for display."""
+    """Return settings with file paths converted to filenames for display.
+
+    Secrets (e.g. gemini_api_key) are masked and never returned in full.
+    """
     settings = get_all_settings()
     settings["calendar_file"] = get_filename_from_path(settings.get("calendar_file", ""))
     settings["campaign_list_file"] = get_filename_from_path(settings.get("campaign_list_file", ""))
+    # Mask secrets so they are never exposed in API responses
+    for key in SECRET_SETTING_KEYS:
+        if key in settings:
+            settings[key] = mask_secret(settings[key])
     return settings
 
 
@@ -1007,8 +1086,47 @@ async def admin_get_settings():
 
 @app.put("/admin/settings")
 async def admin_update_settings(req: SettingsUpdateRequest):
+    # General settings
     if req.assistant_name is not None:
         set_setting("assistant_name", req.assistant_name)
+    if req.organization_name is not None:
+        set_setting("organization_name", req.organization_name)
+    if req.mosque_name is not None:
+        set_setting("mosque_name", req.mosque_name)
+    if req.default_language is not None:
+        set_setting("default_language", req.default_language)
+    if req.timezone is not None:
+        set_setting("timezone", req.timezone)
+    if req.country is not None:
+        set_setting("country", req.country)
+    if req.city is not None:
+        set_setting("city", req.city)
+
+    # AI settings (secrets are stored but never returned in full)
+    if req.gemini_api_key is not None and req.gemini_api_key != "":
+        # Ignore the masked placeholder value sent back from the frontend
+        if not req.gemini_api_key.startswith("•"):
+            set_setting("gemini_api_key", req.gemini_api_key)
+    if req.ai_model is not None:
+        set_setting("ai_model", req.ai_model)
+    if req.ai_temperature is not None:
+        set_setting("ai_temperature", req.ai_temperature)
+    if req.ai_max_tokens is not None:
+        set_setting("ai_max_tokens", req.ai_max_tokens)
+
+    # WhatsApp settings
+    if req.whatsapp_bot_number is not None:
+        set_setting("whatsapp_bot_number", req.whatsapp_bot_number)
+    if req.whatsapp_welcome_message is not None:
+        set_setting("whatsapp_welcome_message", req.whatsapp_welcome_message)
+    if req.whatsapp_fallback_message is not None:
+        set_setting("whatsapp_fallback_message", req.whatsapp_fallback_message)
+
+    # Security settings
+    if req.session_timeout_minutes is not None:
+        set_setting("session_timeout_minutes", req.session_timeout_minutes)
+
+    # Legacy prompt (kept for backward compatibility)
     if req.system_prompt is not None:
         set_setting("system_prompt", req.system_prompt)
 
@@ -1019,7 +1137,57 @@ async def admin_update_settings(req: SettingsUpdateRequest):
     return {"ok": True, "settings": get_settings_for_display()}
 
 
-@app.post("/admin/settings/calendar")
+@app.get("/admin/settings/prompts")
+async def admin_get_prompts():
+    """Return all prompt templates."""
+    return {"prompts": get_all_prompts()}
+
+
+@app.put("/admin/settings/prompts")
+async def admin_update_prompts(req: PromptsUpdateRequest):
+    """Update one or more prompt templates."""
+    if req.system_prompt is not None:
+        set_prompt("system_prompt", req.system_prompt)
+    if req.campaign_prompt is not None:
+        set_prompt("campaign_prompt", req.campaign_prompt)
+    if req.visitor_prompt is not None:
+        set_prompt("visitor_prompt", req.visitor_prompt)
+    if req.update_prompt is not None:
+        set_prompt("update_prompt", req.update_prompt)
+
+    global qa_chain
+    if qa_chain is not None:
+        qa_chain = build_qa_chain_from_vectordb(vectordb)
+
+    return {"ok": True, "prompts": get_all_prompts()}
+
+
+@app.post("/admin/settings/change-password")
+async def admin_change_password(req: ChangePasswordRequest):
+    """Change the admin password.
+
+    Verifies the current password against the DB (if a DB user exists) or the
+    environment variable, then stores the new hash in the database.
+    """
+    username = ADMIN_USERNAME or "admin"
+    db_user = get_admin_user(username)
+
+    if db_user:
+        if not verify_password(req.current_password, db_user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Current password is incorrect")
+    else:
+        # Fall back to environment variable for first-time change
+        if not ADMIN_PASSWORD or not secrets.compare_digest(req.current_password, ADMIN_PASSWORD):
+            raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+
+    change_admin_password(username, req.new_password)
+    return {"ok": True, "message": "Password changed successfully"}
+
+
+@app.post("/admin/settings/upload/calendar")
 async def admin_upload_calendar(file: UploadFile = File(...)):
     filename = Path(file.filename or "calendar.json").name
     suffix = Path(filename).suffix.lower()
@@ -1037,15 +1205,36 @@ async def admin_upload_calendar(file: UploadFile = File(...)):
     finally:
         await file.close()
 
+    size_bytes = dest.stat().st_size
+    if size_bytes > MAX_SETTINGS_FILE_SIZE_BYTES:
+        dest.unlink()
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is {MAX_SETTINGS_FILE_SIZE_BYTES // (1024 * 1024)} MB.",
+        )
+
+    uploaded_at = datetime.fromtimestamp(dest.stat().st_mtime).isoformat(timespec="seconds")
+
+    # Register in uploaded_files (replaces old record with same filename)
+    upsert_uploaded_file(
+        filename=filename,
+        file_type="calendar",
+        size_bytes=size_bytes,
+        file_path=str(dest),
+        uploaded_at=uploaded_at,
+    )
+
     set_setting("calendar_file", str(dest))
     return {
         "ok": True,
         "calendar_file": filename,
+        "uploaded_at": uploaded_at,
+        "size_bytes": size_bytes,
         "message": "Calendar file uploaded successfully",
     }
 
 
-@app.post("/admin/settings/campaign-list")
+@app.post("/admin/settings/upload/campaign")
 async def admin_upload_campaign_list(file: UploadFile = File(...)):
     filename = Path(file.filename or "campaign_list.xlsx").name
     suffix = Path(filename).suffix.lower()
@@ -1063,10 +1252,31 @@ async def admin_upload_campaign_list(file: UploadFile = File(...)):
     finally:
         await file.close()
 
+    size_bytes = dest.stat().st_size
+    if size_bytes > MAX_SETTINGS_FILE_SIZE_BYTES:
+        dest.unlink()
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is {MAX_SETTINGS_FILE_SIZE_BYTES // (1024 * 1024)} MB.",
+        )
+
+    uploaded_at = datetime.fromtimestamp(dest.stat().st_mtime).isoformat(timespec="seconds")
+
+    # Register in uploaded_files (replaces old record with same filename)
+    upsert_uploaded_file(
+        filename=filename,
+        file_type="campaign_list",
+        size_bytes=size_bytes,
+        file_path=str(dest),
+        uploaded_at=uploaded_at,
+    )
+
     set_setting("campaign_list_file", str(dest))
     return {
         "ok": True,
         "campaign_list_file": filename,
+        "uploaded_at": uploaded_at,
+        "size_bytes": size_bytes,
         "message": "Campaign list file uploaded successfully",
     }
 

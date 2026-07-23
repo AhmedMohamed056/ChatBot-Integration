@@ -1,5 +1,7 @@
 """SQLite persistence for dynamic application data."""
 
+import hashlib
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -88,12 +90,41 @@ def init_db() -> None:
             """
         )
 
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS prompt_templates (
+                name TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_users (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+
         defaults = {
             "assistant_name": "معين الزائرين",
             "system_prompt": "",
             "calendar_file": "",
             "campaign_list_file": "",
             "timezone": "Asia/Riyadh",
+            "organization_name": "",
+            "mosque_name": "",
+            "default_language": "ar",
+            "country": "",
+            "city": "",
+            "gemini_api_key": "",
+            "ai_model": "gemini-1.5-flash",
+            "ai_temperature": "0.3",
+            "ai_max_tokens": "1024",
+            "whatsapp_bot_number": "",
+            "whatsapp_welcome_message": "",
+            "whatsapp_fallback_message": "",
+            "session_timeout_minutes": "60",
         }
         for key, value in defaults.items():
             conn.execute(
@@ -102,6 +133,30 @@ def init_db() -> None:
                 VALUES (?, ?, ?)
                 """,
                 (key, value, utc_now()),
+            )
+
+        prompt_defaults = {
+            "system_prompt": (
+                "أنت مساعد ذكي لمسجد. تجيب على أسئلة الزائرين بدقة ووضوح باستخدام المعلومات المتوفرة."
+            ),
+            "campaign_prompt": (
+                "استخرج معلومات الحملة من رسالة المشرف: اسم الحملة، رقم واتساب، "
+                "الرسالة، التاريخ، تاريخ الانتهاء، والمعلومات المستخرجة."
+            ),
+            "visitor_prompt": (
+                "أجب على سؤال الزائر بناءً على المعرفة المتوفرة والحملات النشطة والتقويم الإسلامي."
+            ),
+            "update_prompt": (
+                "حدد ما إذا كانت رسالة الزائر تتطلب تحديث معلومات الحملة أم مجرد استفسار."
+            ),
+        }
+        for name, content in prompt_defaults.items():
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO prompt_templates (name, content, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (name, content, utc_now()),
             )
 
 
@@ -459,3 +514,115 @@ def get_unanswered_questions(limit: int = 50) -> list[dict[str, Any]]:
             (limit,),
         ).fetchall()
     return [row_to_dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Prompt templates
+# ---------------------------------------------------------------------------
+
+PROMPT_NAMES = ("system_prompt", "campaign_prompt", "visitor_prompt", "update_prompt")
+
+
+def get_prompt(name: str, default: str = "") -> str:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT content FROM prompt_templates WHERE name = ?", (name,)
+        ).fetchone()
+    if row:
+        return row["content"]
+    # Fallback to system_settings for backward compatibility (system_prompt)
+    if name == "system_prompt":
+        return get_setting("system_prompt", default)
+    return default
+
+
+def set_prompt(name: str, content: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO prompt_templates (name, content, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at
+            """,
+            (name, content, utc_now()),
+        )
+    # Keep system_settings.system_prompt in sync for backward compatibility
+    if name == "system_prompt":
+        set_setting("system_prompt", content)
+
+
+def get_all_prompts() -> dict[str, str]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT name, content FROM prompt_templates"
+        ).fetchall()
+    result = {row["name"]: row["content"] for row in rows}
+    # Ensure all expected prompts exist
+    for name in PROMPT_NAMES:
+        if name not in result:
+            result[name] = get_prompt(name)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Admin password hashing
+# ---------------------------------------------------------------------------
+
+def hash_password(password: str) -> str:
+    """Hash a password with a random salt using PBKDF2-HMAC-SHA256."""
+    salt = secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), 100000)
+    return f"pbkdf2_sha256${salt}${h.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """Verify a password against a stored hash."""
+    try:
+        if stored.startswith("pbkdf2_sha256$"):
+            parts = stored.split("$")
+            if len(parts) != 3:
+                return False
+            salt = parts[1]
+            expected = parts[2]
+            h = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), 100000)
+            return secrets.compare_digest(h.hex(), expected)
+        # Fallback: plaintext (legacy)
+        return secrets.compare_digest(password, stored)
+    except Exception:
+        return False
+
+
+def get_admin_user(username: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM admin_users WHERE username = ?", (username,)
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def upsert_admin_user(username: str, password_hash: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO admin_users (username, password_hash, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash, updated_at = excluded.updated_at
+            """,
+            (username, password_hash, utc_now()),
+        )
+
+
+def change_admin_password(username: str, new_password: str) -> None:
+    upsert_admin_user(username, hash_password(new_password))
+
+
+# ---------------------------------------------------------------------------
+# Uploaded file info helpers
+# ---------------------------------------------------------------------------
+
+def get_uploaded_file_by_filename(filename: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM uploaded_files WHERE filename = ?", (filename,)
+        ).fetchone()
+    return row_to_dict(row)

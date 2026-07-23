@@ -799,64 +799,174 @@
     const CALENDAR_ACCEPT_ATTR = '.xlsx,.xls,.csv,.json';
     const CAMPAIGN_LIST_ACCEPTED_EXTENSIONS = ['.xlsx', '.xls', '.csv'];
     const CAMPAIGN_LIST_ACCEPT_ATTR = '.xlsx,.xls,.csv';
+    const MAX_FILE_SIZE_MB = 10;
 
-    function validateSettingsFile(file, allowedExtensions, label) {
-      if (!file) return false;
+    function validateSettingsFile(file, allowedExtensions) {
+      if (!file) return { ok: false, error: 'No file selected.' };
       const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
       if (!allowedExtensions.includes(ext)) {
-        return false;
+        return { ok: false, error: 'Unsupported file type. Allowed: ' + allowedExtensions.join(', ') };
       }
-      return true;
+      if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        return { ok: false, error: 'File too large. Maximum: ' + MAX_FILE_SIZE_MB + ' MB' };
+      }
+      return { ok: true };
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes) return '—';
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
     function SettingsView() {
       const [settings, setSettings] = useState({
         assistant_name: '',
-        system_prompt: '',
+        organization_name: '',
+        mosque_name: '',
+        default_language: 'ar',
+        timezone: 'Asia/Riyadh',
+        country: '',
+        city: '',
+        gemini_api_key: '',
+        ai_model: 'gemini-1.5-flash',
+        ai_temperature: '0.3',
+        ai_max_tokens: '1024',
+        whatsapp_bot_number: '',
+        whatsapp_welcome_message: '',
+        whatsapp_fallback_message: '',
+        session_timeout_minutes: '60',
         calendar_file: '',
+        calendar_uploaded_at: '',
+        calendar_size_bytes: 0,
         campaign_list_file: '',
+        campaign_uploaded_at: '',
+        campaign_size_bytes: 0,
       });
+      const [prompts, setPrompts] = useState({
+        system_prompt: '',
+        campaign_prompt: '',
+        visitor_prompt: '',
+        update_prompt: '',
+      });
+      const [loading, setLoading] = useState(true);
+      const [saving, setSaving] = useState(false);
+      const [savingPrompts, setSavingPrompts] = useState(false);
       const [message, setMessage] = useState('');
+      const [messageType, setMessageType] = useState('');
       const [calendarUploading, setCalendarUploading] = useState(false);
       const [calendarDragging, setCalendarDragging] = useState(false);
       const [campaignUploading, setCampaignUploading] = useState(false);
       const [campaignDragging, setCampaignDragging] = useState(false);
+      const [passwordForm, setPasswordForm] = useState({ current_password: '', new_password: '', confirm_password: '' });
+      const [changingPassword, setChangingPassword] = useState(false);
+
+      function showMsg(text, type) {
+        setMessage(text);
+        setMessageType(type || 'info');
+      }
 
       useEffect(() => {
-        apiGet('/admin/settings').then(setSettings).catch(() => {});
+        Promise.all([
+          apiGet('/admin/settings'),
+          apiGet('/admin/settings/prompts'),
+        ]).then(([s, p]) => {
+          setSettings((prev) => ({ ...prev, ...s }));
+          if (p.prompts) setPrompts(p.prompts);
+          setLoading(false);
+        }).catch(() => {
+          showMsg('Failed to load settings', 'error');
+          setLoading(false);
+        });
       }, []);
 
       async function saveSettings(e) {
         e.preventDefault();
+        setSaving(true);
+        showMsg('Saving...', 'info');
         try {
           const payload = {
             assistant_name: settings.assistant_name || '',
-            system_prompt: settings.system_prompt || '',
+            organization_name: settings.organization_name || '',
+            mosque_name: settings.mosque_name || '',
+            default_language: settings.default_language || 'ar',
+            timezone: settings.timezone || 'Asia/Riyadh',
+            country: settings.country || '',
+            city: settings.city || '',
+            ai_model: settings.ai_model || 'gemini-1.5-flash',
+            ai_temperature: settings.ai_temperature || '0.3',
+            ai_max_tokens: settings.ai_max_tokens || '1024',
+            whatsapp_bot_number: settings.whatsapp_bot_number || '',
+            whatsapp_welcome_message: settings.whatsapp_welcome_message || '',
+            whatsapp_fallback_message: settings.whatsapp_fallback_message || '',
+            session_timeout_minutes: settings.session_timeout_minutes || '60',
           };
+          // Only send API key if user typed a new value (not the masked placeholder)
+          if (settings.gemini_api_key && !settings.gemini_api_key.startsWith('•')) {
+            payload.gemini_api_key = settings.gemini_api_key;
+          }
           const data = await apiSend('/admin/settings', 'PUT', payload);
           setSettings((prev) => ({ ...prev, ...data.settings }));
-          setMessage('Settings saved');
+          showMsg('Settings saved successfully', 'success');
         } catch (err) {
-          setMessage(err.message || 'Save failed');
+          showMsg(err.message || 'Save failed', 'error');
+        } finally {
+          setSaving(false);
         }
+      }
+
+      function resetSettings() {
+        setLoading(true);
+        apiGet('/admin/settings').then((s) => {
+          setSettings((prev) => ({ ...prev, ...s }));
+          showMsg('Settings reset to saved values', 'info');
+        }).catch(() => {
+          showMsg('Failed to reload settings', 'error');
+        }).finally(() => setLoading(false));
+      }
+
+      async function savePrompts(e) {
+        e.preventDefault();
+        setSavingPrompts(true);
+        showMsg('Saving prompts...', 'info');
+        try {
+          const data = await apiSend('/admin/settings/prompts', 'PUT', prompts);
+          if (data.prompts) setPrompts(data.prompts);
+          showMsg('Prompts saved successfully', 'success');
+        } catch (err) {
+          showMsg(err.message || 'Save failed', 'error');
+        } finally {
+          setSavingPrompts(false);
+        }
+      }
+
+      function resetPrompts() {
+        apiGet('/admin/settings/prompts').then((p) => {
+          if (p.prompts) setPrompts(p.prompts);
+          showMsg('Prompts reset to saved values', 'info');
+        }).catch(() => showMsg('Failed to reload prompts', 'error'));
       }
 
       async function uploadCalendar(file) {
         if (!file) return;
-        if (!validateSettingsFile(file, CALENDAR_ACCEPTED_EXTENSIONS)) {
-          setMessage('Unsupported calendar file type. Supported: XLSX, XLS, CSV, JSON');
-          return;
-        }
+        const v = validateSettingsFile(file, CALENDAR_ACCEPTED_EXTENSIONS);
+        if (!v.ok) { showMsg(v.error, 'error'); return; }
         setCalendarUploading(true);
-        setMessage('');
+        showMsg('Uploading calendar...', 'info');
         const form = new FormData();
         form.append('file', file);
         try {
-          const data = await apiSend('/admin/settings/calendar', 'POST', form);
-          setSettings((prev) => ({ ...prev, calendar_file: data.calendar_file || prev.calendar_file }));
-          setMessage(data.message || 'Calendar uploaded');
+          const data = await apiSend('/admin/settings/upload/calendar', 'POST', form);
+          setSettings((prev) => ({
+            ...prev,
+            calendar_file: data.calendar_file || prev.calendar_file,
+            calendar_uploaded_at: data.uploaded_at || '',
+            calendar_size_bytes: data.size_bytes || 0,
+          }));
+          showMsg(data.message || 'Calendar uploaded', 'success');
         } catch (err) {
-          setMessage(err.message || 'Upload failed');
+          showMsg(err.message || 'Upload failed', 'error');
         } finally {
           setCalendarUploading(false);
         }
@@ -864,78 +974,144 @@
 
       async function uploadCampaignList(file) {
         if (!file) return;
-        if (!validateSettingsFile(file, CAMPAIGN_LIST_ACCEPTED_EXTENSIONS)) {
-          setMessage('Unsupported campaign list file type. Supported: XLSX, XLS, CSV');
-          return;
-        }
+        const v = validateSettingsFile(file, CAMPAIGN_LIST_ACCEPTED_EXTENSIONS);
+        if (!v.ok) { showMsg(v.error, 'error'); return; }
         setCampaignUploading(true);
-        setMessage('');
+        showMsg('Uploading campaign list...', 'info');
         const form = new FormData();
         form.append('file', file);
         try {
-          const data = await apiSend('/admin/settings/campaign-list', 'POST', form);
-          setSettings((prev) => ({ ...prev, campaign_list_file: data.campaign_list_file || prev.campaign_list_file }));
-          setMessage(data.message || 'Campaign list uploaded');
+          const data = await apiSend('/admin/settings/upload/campaign', 'POST', form);
+          setSettings((prev) => ({
+            ...prev,
+            campaign_list_file: data.campaign_list_file || prev.campaign_list_file,
+            campaign_uploaded_at: data.uploaded_at || '',
+            campaign_size_bytes: data.size_bytes || 0,
+          }));
+          showMsg(data.message || 'Campaign list uploaded', 'success');
         } catch (err) {
-          setMessage(err.message || 'Upload failed');
+          showMsg(err.message || 'Upload failed', 'error');
         } finally {
           setCampaignUploading(false);
         }
       }
 
+      async function changePassword(e) {
+        e.preventDefault();
+        if (passwordForm.new_password !== passwordForm.confirm_password) {
+          showMsg('New passwords do not match', 'error');
+          return;
+        }
+        if (passwordForm.new_password.length < 6) {
+          showMsg('New password must be at least 6 characters', 'error');
+          return;
+        }
+        setChangingPassword(true);
+        showMsg('Changing password...', 'info');
+        try {
+          const data = await apiSend('/admin/settings/change-password', 'POST', {
+            current_password: passwordForm.current_password,
+            new_password: passwordForm.new_password,
+          });
+          setPasswordForm({ current_password: '', new_password: '', confirm_password: '' });
+          showMsg(data.message || 'Password changed', 'success');
+        } catch (err) {
+          showMsg(err.message || 'Password change failed', 'error');
+        } finally {
+          setChangingPassword(false);
+        }
+      }
+
+      const msgColor = messageType === 'error' ? '#ff6b6b' : messageType === 'success' ? '#51cf66' : 'var(--sage)';
+
+      if (loading) {
+        return React.createElement('div', null,
+          React.createElement('h1', { className: 'page-title' }, 'Settings'),
+          React.createElement('p', { className: 'muted' }, 'Loading settings...')
+        );
+      }
+
+      // Helper to create a labeled input
+      function field(label, key, opts) {
+        opts = opts || {};
+        return React.createElement('label', null, label,
+          React.createElement(opts.tag || 'input', {
+            type: opts.type || 'text',
+            value: settings[key] || '',
+            onChange: (e) => setSettings({ ...settings, [key]: e.target.value }),
+            placeholder: opts.placeholder || '',
+            rows: opts.rows,
+            style: opts.style,
+          })
+        );
+      }
+
+      // Helper to create a prompt textarea
+      function promptField(label, key) {
+        return React.createElement('label', null, label,
+          React.createElement('textarea', {
+            value: prompts[key] || '',
+            onChange: (e) => setPrompts({ ...prompts, [key]: e.target.value }),
+            rows: 4,
+            style: { minHeight: '90px' },
+          })
+        );
+      }
+
       return React.createElement('div', null,
         React.createElement('h1', { className: 'page-title' }, 'Settings'),
-        React.createElement('p', { className: 'subtext' }, 'إعدادات المساعد والتقويم.'),
+        React.createElement('p', { className: 'subtext' }, 'مركز التحكم بإعدادات النظام.'),
+
+        // Message bar
+        message ? React.createElement('div', {
+          style: {
+            padding: '10px 14px',
+            marginBottom: '18px',
+            borderRadius: '10px',
+            background: 'rgba(244,239,230,0.06)',
+            color: msgColor,
+            fontSize: '14px',
+          }
+        }, message) : null,
+
+        // 1. General Settings
         React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
+          React.createElement('h2', { style: { marginTop: 0 } }, 'General Settings'),
+          React.createElement('p', { className: 'muted' }, 'معلومات المؤسسة والمسجد.'),
           React.createElement('form', { className: 'form-grid', onSubmit: saveSettings },
-            React.createElement('label', null, 'Assistant Name',
-              React.createElement('input', {
-                value: settings.assistant_name || '',
-                onChange: (e) => setSettings({ ...settings, assistant_name: e.target.value })
-              })
-            ),
-            React.createElement('label', null, 'System Prompt',
-              React.createElement('textarea', {
-                value: settings.system_prompt || '',
-                onChange: (e) => setSettings({ ...settings, system_prompt: e.target.value })
-              })
-            ),
-            React.createElement('button', { className: 'btn', type: 'submit' }, 'Save Settings'),
-            React.createElement('div', { className: 'message' }, message)
+            field('Organization Name', 'organization_name'),
+            field('Mosque Name', 'mosque_name'),
+            field('Default Language', 'default_language'),
+            field('Time Zone', 'timezone', { placeholder: 'Asia/Riyadh' }),
+            field('Country', 'country'),
+            field('City', 'city'),
+            React.createElement('div', { style: { gridColumn: '1 / -1', display: 'flex', gap: '10px', marginTop: '8px' } },
+              React.createElement('button', { className: 'btn', type: 'submit', disabled: saving }, saving ? 'Saving...' : 'Save'),
+              React.createElement('button', { className: 'btn secondary', type: 'button', onClick: resetSettings }, 'Reset')
+            )
           )
         ),
+
+        // 2. AI Settings
         React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
-          React.createElement('h2', { style: { marginTop: 0 } }, 'Calendar File'),
-          React.createElement('p', { className: 'muted' }, 'رفع تقويم هجري مخصص. المدعوم: Excel, CSV, JSON'),
-          React.createElement('div', {
-            className: 'drop-zone',
-            style: calendarDragging ? { borderColor: 'var(--gold-soft)', background: 'rgba(227,168,87,0.12)' } : null,
-            onDragOver: (e) => { e.preventDefault(); setCalendarDragging(true); },
-            onDragLeave: () => setCalendarDragging(false),
-            onDrop: (e) => {
-              e.preventDefault();
-              setCalendarDragging(false);
-              const file = e.dataTransfer.files?.[0];
-              if (file) uploadCalendar(file);
-            }
-          },
-            React.createElement('h3', { style: { margin: '0 0 10px', fontSize: '18px' } }, calendarUploading ? 'جاري الرفع...' : 'اسحب الملف أو اختره'),
-            React.createElement('p', { className: 'muted' }, 'XLSX, XLS, CSV, JSON'),
-            React.createElement('label', { className: 'btn', htmlFor: 'calendar-upload-input' }, calendarUploading ? 'Uploading...' : 'اختيار ملف'),
-            React.createElement('input', {
-              id: 'calendar-upload-input',
-              type: 'file',
-              accept: CALENDAR_ACCEPT_ATTR,
-              style: { display: 'none' },
-              onChange: (e) => uploadCalendar(e.target.files?.[0])
-            })
-          ),
-          React.createElement('div', { className: 'label', style: { marginTop: '14px' } }, 'Current Calendar File'),
-          React.createElement('div', { style: { color: 'var(--sand)' } }, settings.calendar_file || '—')
+          React.createElement('h2', { style: { marginTop: 0 } }, 'AI Settings'),
+          React.createElement('p', { className: 'muted' }, 'إعدادات نموذج الذكاء الاصطناعي. المفتاح يُخزن بأمان ولا يُعرض كاملًا.'),
+          React.createElement('form', { className: 'form-grid', onSubmit: saveSettings },
+            field('Gemini API Key', 'gemini_api_key', { type: 'password', placeholder: 'Enter new key to replace' }),
+            field('Active AI Model', 'ai_model', { placeholder: 'gemini-1.5-flash' }),
+            field('Temperature', 'ai_temperature', { placeholder: '0.3' }),
+            field('Max Tokens', 'ai_max_tokens', { placeholder: '1024' }),
+            React.createElement('div', { style: { gridColumn: '1 / -1', display: 'flex', gap: '10px', marginTop: '8px' } },
+              React.createElement('button', { className: 'btn', type: 'submit', disabled: saving }, saving ? 'Saving...' : 'Save'),
+              React.createElement('button', { className: 'btn secondary', type: 'button', onClick: resetSettings }, 'Reset')
+            )
+          )
         ),
-        React.createElement('div', { className: 'card' },
-          React.createElement('h2', { style: { marginTop: 0 } }, 'Campaign List File'),
-          React.createElement('p', { className: 'muted' }, 'رفع قائمة الحملات. المدعوم: Excel, CSV'),
+
+        // 3. Campaign Files
+        React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
+          React.createElement('h2', { style: { marginTop: 0 } }, 'Campaign Files'),
+          React.createElement('p', { className: 'muted' }, 'رفع ملف الحملات (Excel/CSV). لا يتم تحليله الآن، فقط رفع وتسجيل.'),
           React.createElement('div', {
             className: 'drop-zone',
             style: campaignDragging ? { borderColor: 'var(--gold-soft)', background: 'rgba(227,168,87,0.12)' } : null,
@@ -949,18 +1125,128 @@
             }
           },
             React.createElement('h3', { style: { margin: '0 0 10px', fontSize: '18px' } }, campaignUploading ? 'جاري الرفع...' : 'اسحب الملف أو اختره'),
-            React.createElement('p', { className: 'muted' }, 'XLSX, XLS, CSV'),
+            React.createElement('p', { className: 'muted' }, 'XLSX, XLS, CSV — Max ' + MAX_FILE_SIZE_MB + ' MB'),
             React.createElement('label', { className: 'btn', htmlFor: 'campaign-list-upload-input' }, campaignUploading ? 'Uploading...' : 'اختيار ملف'),
             React.createElement('input', {
               id: 'campaign-list-upload-input',
               type: 'file',
               accept: CAMPAIGN_LIST_ACCEPT_ATTR,
               style: { display: 'none' },
-              onChange: (e) => uploadCampaignList(e.target.files?.[0])
+              onChange: (e) => { uploadCampaignList(e.target.files?.[0]); e.target.value = ''; }
             })
           ),
-          React.createElement('div', { className: 'label', style: { marginTop: '14px' } }, 'Current Campaign List File'),
-          React.createElement('div', { style: { color: 'var(--sand)' } }, settings.campaign_list_file || '—')
+          React.createElement('div', { style: { marginTop: '14px', display: 'grid', gap: '6px' } },
+            React.createElement('div', { className: 'label' }, 'Current Campaign File'),
+            React.createElement('div', { style: { color: 'var(--sand)' } }, settings.campaign_list_file || '—'),
+            settings.campaign_uploaded_at ? React.createElement('div', { className: 'muted', style: { fontSize: '13px' } },
+              'Uploaded: ' + settings.campaign_uploaded_at + ' • Size: ' + formatBytes(settings.campaign_size_bytes)
+            ) : null
+          )
+        ),
+
+        // 4. Calendar File
+        React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
+          React.createElement('h2', { style: { marginTop: 0 } }, 'Calendar File'),
+          React.createElement('p', { className: 'muted' }, 'رفع ملف التقويم (تواريخ ميلادية وهجرية، أوقات الصلاة، المناسبات). لا يتم تحليله الآن.'),
+          React.createElement('div', {
+            className: 'drop-zone',
+            style: calendarDragging ? { borderColor: 'var(--gold-soft)', background: 'rgba(227,168,87,0.12)' } : null,
+            onDragOver: (e) => { e.preventDefault(); setCalendarDragging(true); },
+            onDragLeave: () => setCalendarDragging(false),
+            onDrop: (e) => {
+              e.preventDefault();
+              setCalendarDragging(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) uploadCalendar(file);
+            }
+          },
+            React.createElement('h3', { style: { margin: '0 0 10px', fontSize: '18px' } }, calendarUploading ? 'جاري الرفع...' : 'اسحب الملف أو اختره'),
+            React.createElement('p', { className: 'muted' }, 'XLSX, XLS, CSV, JSON — Max ' + MAX_FILE_SIZE_MB + ' MB'),
+            React.createElement('label', { className: 'btn', htmlFor: 'calendar-upload-input' }, calendarUploading ? 'Uploading...' : 'اختيار ملف'),
+            React.createElement('input', {
+              id: 'calendar-upload-input',
+              type: 'file',
+              accept: CALENDAR_ACCEPT_ATTR,
+              style: { display: 'none' },
+              onChange: (e) => { uploadCalendar(e.target.files?.[0]); e.target.value = ''; }
+            })
+          ),
+          React.createElement('div', { style: { marginTop: '14px', display: 'grid', gap: '6px' } },
+            React.createElement('div', { className: 'label' }, 'Current Calendar File'),
+            React.createElement('div', { style: { color: 'var(--sand)' } }, settings.calendar_file || '—'),
+            settings.calendar_uploaded_at ? React.createElement('div', { className: 'muted', style: { fontSize: '13px' } },
+              'Uploaded: ' + settings.calendar_uploaded_at + ' • Size: ' + formatBytes(settings.calendar_size_bytes)
+            ) : null
+          )
+        ),
+
+        // 5. Prompt Configuration
+        React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
+          React.createElement('h2', { style: { marginTop: 0 } }, 'Prompt Configuration'),
+          React.createElement('p', { className: 'muted' }, 'قوالب الأوامر للذكاء الاصطناعي.'),
+          React.createElement('form', { className: 'form-grid', onSubmit: savePrompts },
+            promptField('System Prompt', 'system_prompt'),
+            promptField('Campaign Prompt', 'campaign_prompt'),
+            promptField('Visitor Prompt', 'visitor_prompt'),
+            promptField('Update Prompt', 'update_prompt'),
+            React.createElement('div', { style: { gridColumn: '1 / -1', display: 'flex', gap: '10px', marginTop: '8px' } },
+              React.createElement('button', { className: 'btn', type: 'submit', disabled: savingPrompts }, savingPrompts ? 'Saving...' : 'Save Prompts'),
+              React.createElement('button', { className: 'btn secondary', type: 'button', onClick: resetPrompts }, 'Reset')
+            )
+          )
+        ),
+
+        // 6. WhatsApp Settings
+        React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
+          React.createElement('h2', { style: { marginTop: 0 } }, 'WhatsApp Settings'),
+          React.createElement('p', { className: 'muted' }, 'إعدادات بوت واتساب (تكوين فقط، لا منطق).'),
+          React.createElement('form', { className: 'form-grid', onSubmit: saveSettings },
+            field('Bot Phone Number', 'whatsapp_bot_number', { placeholder: '9665...' }),
+            field('Welcome Message', 'whatsapp_welcome_message', { tag: 'textarea', rows: 3, style: { minHeight: '70px' } }),
+            field('Default Fallback Message', 'whatsapp_fallback_message', { tag: 'textarea', rows: 3, style: { minHeight: '70px' } }),
+            React.createElement('div', { style: { gridColumn: '1 / -1', display: 'flex', gap: '10px', marginTop: '8px' } },
+              React.createElement('button', { className: 'btn', type: 'submit', disabled: saving }, saving ? 'Saving...' : 'Save'),
+              React.createElement('button', { className: 'btn secondary', type: 'button', onClick: resetSettings }, 'Reset')
+            )
+          )
+        ),
+
+        // 7. Security
+        React.createElement('div', { className: 'card' },
+          React.createElement('h2', { style: { marginTop: 0 } }, 'Security'),
+          React.createElement('p', { className: 'muted' }, 'تغيير كلمة مرور الإدارة ومدة الجلسة.'),
+          React.createElement('form', { className: 'form-grid', onSubmit: changePassword },
+            React.createElement('label', null, 'Current Password',
+              React.createElement('input', {
+                type: 'password',
+                value: passwordForm.current_password,
+                onChange: (e) => setPasswordForm({ ...passwordForm, current_password: e.target.value }),
+                required: true
+              })
+            ),
+            React.createElement('label', null, 'New Password',
+              React.createElement('input', {
+                type: 'password',
+                value: passwordForm.new_password,
+                onChange: (e) => setPasswordForm({ ...passwordForm, new_password: e.target.value }),
+                required: true,
+                minLength: 6
+              })
+            ),
+            React.createElement('label', null, 'Confirm New Password',
+              React.createElement('input', {
+                type: 'password',
+                value: passwordForm.confirm_password,
+                onChange: (e) => setPasswordForm({ ...passwordForm, confirm_password: e.target.value }),
+                required: true,
+                minLength: 6
+              })
+            ),
+            field('Session Timeout (minutes)', 'session_timeout_minutes', { placeholder: '60' }),
+            React.createElement('div', { style: { gridColumn: '1 / -1', display: 'flex', gap: '10px', marginTop: '8px' } },
+              React.createElement('button', { className: 'btn', type: 'submit', disabled: changingPassword }, changingPassword ? 'Changing...' : 'Change Password')
+            )
+          )
         )
       );
     }
