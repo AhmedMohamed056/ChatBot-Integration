@@ -19,3 +19,4 @@ torch==2.6.0+cpu
 python-docx
 openpyxl
 hijri-converter
+sqlalchemy>=2.0
