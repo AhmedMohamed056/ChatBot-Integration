@@ -27,6 +27,7 @@ from langchain_core.documents import Document
 from campaign_service import build_active_campaign_context, process_campaign_update
 from database import (
     add_visitor_question,
+    change_admin_password,
     create_campaign,
     delete_campaign,
     delete_campaign_message,
@@ -37,6 +38,7 @@ from database import (
     get_dashboard_stats,
     get_top_visitor_questions,
     get_unanswered_questions,
+    get_uploaded_file_record,
     init_db,
     list_campaigns,
     list_campaigns_with_stats,
@@ -74,8 +76,8 @@ os.makedirs(STATIC_PDF_DIR, exist_ok=True)
 os.makedirs(CALENDAR_DIR, exist_ok=True)
 
 # Allowed file extensions for settings uploads
-CALENDAR_ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv", ".json"}
-CAMPAIGN_LIST_ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+CALENDAR_ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
+CAMPAIGN_FILE_ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
 
 app = FastAPI()
 
@@ -124,8 +126,15 @@ class CampaignUpdateRequest(BaseModel):
 
 
 class SettingsUpdateRequest(BaseModel):
-    assistant_name: str | None = None
+    bot_name: str | None = None
     system_prompt: str | None = None
+    gemini_api_key: str | None = None
+    gemini_model: str | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
 
 
 def list_supported_documents() -> list[dict]:
@@ -192,7 +201,7 @@ class ProgressEmbeddings:
 
 def get_assistant_name() -> str:
     settings = get_all_settings()
-    return settings.get("assistant_name") or "معين الزائرين"
+    return settings.get("bot_name") or "معين الزائرين"
 
 
 def get_custom_system_prompt() -> str:
@@ -210,11 +219,22 @@ def get_filename_from_path(path_str: str) -> str:
         return path_str
 
 
+def mask_api_key(key: str) -> str:
+    """Mask an API key showing only the first 4 and last 4 characters."""
+    if not key or len(key) < 8:
+        return key[:4] + "****" if key else ""
+    return key[:4] + "****" + key[-4:]
+
+
 def get_settings_for_display() -> dict[str, str]:
-    """Return settings with file paths converted to filenames for display."""
+    """Return settings with file paths converted to filenames and API key masked."""
     settings = get_all_settings()
+    settings["bot_name"] = settings.get("bot_name", "")
+    settings["system_prompt"] = settings.get("system_prompt", "")
+    settings["gemini_model"] = settings.get("gemini_model", "gemini-2.5-flash")
+    settings["campaign_file"] = get_filename_from_path(settings.get("campaign_file", ""))
     settings["calendar_file"] = get_filename_from_path(settings.get("calendar_file", ""))
-    settings["campaign_list_file"] = get_filename_from_path(settings.get("campaign_list_file", ""))
+    settings["gemini_api_key"] = mask_api_key(settings.get("gemini_api_key", ""))
     return settings
 
 
@@ -1007,27 +1027,73 @@ async def admin_get_settings():
 
 @app.put("/admin/settings")
 async def admin_update_settings(req: SettingsUpdateRequest):
-    if req.assistant_name is not None:
-        set_setting("assistant_name", req.assistant_name)
+    if req.bot_name is not None:
+        set_setting("bot_name", req.bot_name)
     if req.system_prompt is not None:
         set_setting("system_prompt", req.system_prompt)
+    if req.gemini_api_key is not None:
+        set_setting("gemini_api_key", req.gemini_api_key)
+    if req.gemini_model is not None:
+        set_setting("gemini_model", req.gemini_model)
 
-    global qa_chain
-    if qa_chain is not None:
-        qa_chain = build_qa_chain_from_vectordb(vectordb)
+    # Rebuild QA chain if system prompt changed (requires vectordb)
+    if req.system_prompt is not None:
+        global qa_chain
+        if qa_chain is not None and vectordb is not None:
+            qa_chain = build_qa_chain_from_vectordb(vectordb)
 
     return {"ok": True, "settings": get_settings_for_display()}
 
 
-@app.post("/admin/settings/calendar")
-async def admin_upload_calendar(file: UploadFile = File(...)):
-    filename = Path(file.filename or "calendar.json").name
+@app.post("/admin/settings/upload/campaign")
+async def admin_upload_campaign_file(file: UploadFile = File(...)):
+    filename = Path(file.filename or "campaign.xlsx").name
+    suffix = Path(filename).suffix.lower()
+
+    if suffix not in CAMPAIGN_FILE_ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Supported campaign file types: XLSX, XLS.",
+        )
+
+    dest = Path(CALENDAR_DIR) / filename
+
+    try:
+        save_uploaded_file(file, dest)
+    finally:
+        await file.close()
+
+    size_bytes = dest.stat().st_size
+
+    # Store file record in uploaded_files table
+    file_record = upsert_uploaded_file(
+        filename=filename,
+        file_type="excel",
+        size_bytes=size_bytes,
+        file_path=str(dest),
+    )
+
+    # Store reference in settings
+    from datetime import timezone
+    set_setting("campaign_file", str(dest))
+
+    return {
+        "ok": True,
+        "filename": filename,
+        "uploaded_at": file_record["uploaded_at"],
+        "message": "Campaign file uploaded successfully",
+    }
+
+
+@app.post("/admin/settings/upload/calendar")
+async def admin_upload_calendar_file(file: UploadFile = File(...)):
+    filename = Path(file.filename or "calendar.xlsx").name
     suffix = Path(filename).suffix.lower()
 
     if suffix not in CALENDAR_ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail="Supported calendar file types: XLSX, XLS, CSV, JSON.",
+            detail="Supported calendar file types: XLSX, XLS.",
         )
 
     dest = Path(CALENDAR_DIR) / filename
@@ -1037,38 +1103,33 @@ async def admin_upload_calendar(file: UploadFile = File(...)):
     finally:
         await file.close()
 
+    size_bytes = dest.stat().st_size
+
+    # Store file record in uploaded_files table
+    file_record = upsert_uploaded_file(
+        filename=filename,
+        file_type="excel",
+        size_bytes=size_bytes,
+        file_path=str(dest),
+    )
+
+    # Store reference in settings
     set_setting("calendar_file", str(dest))
+
     return {
         "ok": True,
-        "calendar_file": filename,
+        "filename": filename,
+        "uploaded_at": file_record["uploaded_at"],
         "message": "Calendar file uploaded successfully",
     }
 
 
-@app.post("/admin/settings/campaign-list")
-async def admin_upload_campaign_list(file: UploadFile = File(...)):
-    filename = Path(file.filename or "campaign_list.xlsx").name
-    suffix = Path(filename).suffix.lower()
-
-    if suffix not in CAMPAIGN_LIST_ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail="Supported campaign list file types: XLSX, XLS, CSV.",
-        )
-
-    dest = Path(CALENDAR_DIR) / filename
-
-    try:
-        save_uploaded_file(file, dest)
-    finally:
-        await file.close()
-
-    set_setting("campaign_list_file", str(dest))
-    return {
-        "ok": True,
-        "campaign_list_file": filename,
-        "message": "Campaign list file uploaded successfully",
-    }
+@app.post("/admin/settings/change-password")
+async def admin_change_password(req: ChangePasswordRequest):
+    success = change_admin_password(req.old_password, req.new_password)
+    if not success:
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    return {"ok": True, "message": "Password changed successfully"}
 
 
 @app.get("/health")

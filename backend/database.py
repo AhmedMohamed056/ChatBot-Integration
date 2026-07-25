@@ -89,11 +89,12 @@ def init_db() -> None:
         )
 
         defaults = {
-            "assistant_name": "معين الزائرين",
+            "bot_name": "معين الزائرين",
             "system_prompt": "",
+            "gemini_api_key": "",
+            "gemini_model": "gemini-2.5-flash",
+            "campaign_file": "",
             "calendar_file": "",
-            "campaign_list_file": "",
-            "timezone": "Asia/Riyadh",
         }
         for key, value in defaults.items():
             conn.execute(
@@ -363,6 +364,27 @@ def list_uploaded_files_db() -> list[dict[str, Any]]:
             "SELECT * FROM uploaded_files ORDER BY uploaded_at DESC"
         ).fetchall()
     return [row_to_dict(row) for row in rows]
+
+
+def get_uploaded_file_record(filename: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM uploaded_files WHERE filename = ?", (filename,)
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def change_admin_password(old_password: str, new_password: str) -> bool:
+    """Verify old password and update to new password.
+    Returns True if successful, False if old password doesn't match.
+    """
+    from os import environ
+    current = environ.get("ADMIN_PASSWORD", "")
+    if current != old_password:
+        return False
+    # Update the environment variable (in-memory only; .env must be updated manually)
+    environ["ADMIN_PASSWORD"] = new_password
+    return True
 
 
 def add_visitor_question(
