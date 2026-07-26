@@ -28,6 +28,7 @@ from campaign_detection_service import detect_visitor
 from campaign_service import build_active_campaign_context, process_campaign_update
 from campaign_update_extraction_service import extract_campaign_update
 from campaign_import_service import import_campaign_visitors
+from relative_date_service import resolve_relative_date
 from db import init_db as init_campaign_db
 from database import (
     add_visitor_question,
@@ -149,6 +150,12 @@ class CampaignDetectRequest(BaseModel):
 class CampaignExtractRequest(BaseModel):
     """Request body for the campaign update extraction endpoint."""
     message: str
+
+
+class DateResolveRequest(BaseModel):
+    """Request body for the relative date resolution test endpoint."""
+    date_text: str
+    reference_date: str | None = None  # ISO YYYY-MM-DD
 
 
 def list_supported_documents() -> list[dict]:
@@ -1156,6 +1163,41 @@ async def admin_extract_campaign_update(req: CampaignExtractRequest):
         return {"found": False}
 
     return {"found": True, "data": extraction.to_dict()}
+
+
+@app.post("/admin/date/resolve")
+async def admin_resolve_relative_date(req: DateResolveRequest):
+    """Resolve a relative Arabic date expression to a calendar date.
+
+    Testing endpoint for the Relative Date Engine (Task 6). It accepts a
+    ``date_text`` expression and an optional ``reference_date`` (ISO
+    YYYY-MM-DD) and returns the resolved calendar date.
+
+    This endpoint performs date resolution only. It does NOT call any
+    AI/LLM, update the database, or interact with the Calendar Engine.
+    """
+    from datetime import date as date_type
+
+    ref_date = None
+    if req.reference_date:
+        try:
+            ref_date = date_type.fromisoformat(req.reference_date)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="reference_date must be ISO YYYY-MM-DD",
+            )
+
+    try:
+        result = resolve_relative_date(req.date_text, reference_date=ref_date)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Resolution failed: {e}") from e
+
+    return {
+        "success": result.success,
+        "resolved_date": result.resolved_date,
+        "original_text": result.original_text,
+    }
 
 
 @app.post("/admin/settings/upload/calendar")
