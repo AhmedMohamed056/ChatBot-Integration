@@ -17,7 +17,6 @@ calendar integration, reports, or any other future-task functionality.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +25,7 @@ from openpyxl import load_workbook
 from database import get_setting
 from db.base import get_session
 from db.repositories.campaign_visitor_repository import CampaignVisitorRepository
+from phone_utils import normalize_phone
 
 
 # Required columns (case-insensitive, whitespace-trimmed)
@@ -34,30 +34,6 @@ REQUIRED_COLUMNS = {
     "visitor name",
     "phone number",
 }
-
-
-def normalize_phone(phone: str) -> str:
-    """Normalise a phone number to a canonical international format.
-
-    Examples (Egyptian numbers):
-        01012345678   -> 201012345678
-        +201012345678 -> 201012345678
-        201012345678  -> 201012345678
-        0020101234567 -> 201012345678
-    """
-    if not phone:
-        return ""
-    # Extract digits only
-    digits = re.sub(r"\D", "", str(phone))
-
-    # Remove leading double-zero (international prefix)
-    if digits.startswith("00"):
-        digits = digits[2:]
-    # Remove leading single zero (local format) and prepend country code 20
-    elif digits.startswith("0"):
-        digits = "20" + digits[1:]
-
-    return digits
 
 
 def _find_required_headers(header_row: list[str]) -> dict[str, int]:

@@ -1,0 +1,42 @@
+"""Temporary end-to-end validation script for WhatsApp Campaign Detection.
+
+Inserts a test visitor, runs detection against all required phone formats,
+verifies the not-found case, then cleans up the test visitor.
+"""
+from db.base import get_session
+from db.repositories.campaign_visitor_repository import CampaignVisitorRepository
+from campaign_detection_service import detect_visitor
+
+TEST_PHONE = "201012345678"
+FORMATS = ["01012345678", "+201012345678", "201012345678", "00201012345678"]
+
+# 1. Insert a temporary test visitor
+with get_session() as s:
+    repo = CampaignVisitorRepository(s)
+    repo.upsert("Test Campaign", "Test Visitor", TEST_PHONE)
+print("Inserted test visitor")
+
+# 2. Run detection for every required format
+results = {}
+for p in FORMATS:
+    results[p] = detect_visitor(p)
+    print(f"{p} -> {results[p]}")
+
+# 3. Not-found case
+not_found = detect_visitor("999999999999")
+print(f"not found -> {not_found}")
+
+# 4. Assertions
+detected_phones = {r["phone_number"] for r in results.values() if r}
+assert len(detected_phones) == 1 and TEST_PHONE in detected_phones, "FORMAT MISMATCH"
+assert all(r is not None for r in results.values()), "Some formats not detected"
+assert not_found is None, "Not-found case failed"
+print("ALL VALIDATIONS PASSED")
+
+# 5. Cleanup
+with get_session() as s:
+    repo = CampaignVisitorRepository(s)
+    v = repo.get_by_phone(TEST_PHONE)
+    if v:
+        s.delete(v)
+print("Cleaned up test visitor")

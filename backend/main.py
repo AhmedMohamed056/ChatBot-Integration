@@ -24,7 +24,9 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.documents import Document
 
+from campaign_detection_service import detect_visitor
 from campaign_service import build_active_campaign_context, process_campaign_update
+from campaign_update_extraction_service import extract_campaign_update
 from campaign_import_service import import_campaign_visitors
 from db import init_db as init_campaign_db
 from database import (
@@ -137,6 +139,16 @@ class SettingsUpdateRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
+
+
+class CampaignDetectRequest(BaseModel):
+    """Request body for the WhatsApp Campaign Detection test endpoint."""
+    phone_number: str
+
+
+class CampaignExtractRequest(BaseModel):
+    """Request body for the campaign update extraction endpoint."""
+    message: str
 
 
 def list_supported_documents() -> list[dict]:
@@ -1100,6 +1112,50 @@ async def admin_import_campaign():
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Import failed: {e}") from e
+
+
+@app.post("/admin/campaign/detect")
+async def admin_detect_campaign(req: CampaignDetectRequest):
+    """Detect whether a WhatsApp phone number belongs to a known campaign visitor.
+
+    This endpoint exists **only for testing** the WhatsApp Campaign Detection
+    flow.  It normalises the supplied phone number, searches
+    ``campaign_visitors``, and returns the visitor info or a not-found result.
+    """
+    try:
+        visitor = await asyncio.to_thread(detect_visitor, req.phone_number)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Detection failed: {e}") from e
+
+    if visitor is None:
+        return {"found": False}
+
+    return {
+        "found": True,
+        "campaign_name": visitor["campaign_name"],
+        "visitor_name": visitor["visitor_name"],
+        "phone_number": visitor["phone_number"],
+    }
+
+
+@app.post("/admin/campaign/extract")
+async def admin_extract_campaign_update(req: CampaignExtractRequest):
+    """Extract campaign update information from an admin WhatsApp message.
+
+    This endpoint performs **extraction only**. It does NOT update the
+    database, call Gemini/any LLM, or interpret dates, times, or prayer
+    names. Date/time fragments are returned verbatim as written in the
+    message.
+    """
+    try:
+        extraction = extract_campaign_update(req.message)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {e}") from e
+
+    if extraction is None:
+        return {"found": False}
+
+    return {"found": True, "data": extraction.to_dict()}
 
 
 @app.post("/admin/settings/upload/calendar")

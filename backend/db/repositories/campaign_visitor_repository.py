@@ -43,6 +43,22 @@ class CampaignVisitorRepository(BaseRepository[CampaignVisitor]):
         )
         return list(self.session.execute(stmt).scalars().all())
 
+    def find_by_phone(self, phone_number: str) -> Optional[dict[str, Any]]:
+        """Return a visitor's basic info by phone number, or ``None``.
+
+        Used by WhatsApp Campaign Detection.  Returns a plain dict with
+        ``campaign_name``, ``visitor_name`` and ``phone_number`` so the
+        caller never touches the ORM entity directly.
+        """
+        visitor = self.get_by_phone(phone_number)
+        if visitor is None:
+            return None
+        return {
+            "campaign_name": visitor.campaign_name,
+            "visitor_name": visitor.visitor_name,
+            "phone_number": visitor.phone_number,
+        }
+
     # ------------------------------------------------------------------
     # Create / upsert
     # ------------------------------------------------------------------
