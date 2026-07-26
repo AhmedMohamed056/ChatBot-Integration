@@ -811,6 +811,8 @@
       });
       const [message, setMessage] = useState('');
       const [campaignUploading, setCampaignUploading] = useState(false);
+      const [importingCampaign, setImportingCampaign] = useState(false);
+      const [importResult, setImportResult] = useState(null);
       const [calendarUploading, setCalendarUploading] = useState(false);
       const [campaignDragging, setCampaignDragging] = useState(false);
       const [calendarDragging, setCalendarDragging] = useState(false);
@@ -872,6 +874,22 @@
           setMessage(err.message || 'Upload failed');
         } finally {
           setCampaignUploading(false);
+        }
+      }
+
+      async function importCampaign() {
+        setImportingCampaign(true);
+        setImportResult(null);
+        setMessage('');
+        try {
+          const data = await apiSend('/admin/campaign/import', 'POST');
+          setImportResult(data);
+          setMessage('Campaign import completed successfully');
+        } catch (err) {
+          setImportResult({ ok: false, error: err.message || 'Import failed' });
+          setMessage(err.message || 'Import failed');
+        } finally {
+          setImportingCampaign(false);
         }
       }
 
@@ -1000,6 +1018,24 @@
           React.createElement('div', { className: 'label' }, 'Current File'),
           React.createElement('div', { style: { color: 'var(--sand)' } }, settings.campaign_file || 'No file uploaded'),
           settings.campaign_file ? React.createElement('div', { className: 'muted', style: { marginTop: '4px' } }, 'Upload date available in database') : null
+        ),
+        React.createElement('div', { style: { marginTop: '18px', borderTop: '1px solid var(--line)', paddingTop: '16px' } },
+          React.createElement('button', {
+            className: 'btn',
+            onClick: importCampaign,
+            disabled: importingCampaign || !settings.campaign_file
+          }, importingCampaign ? 'Importing...' : 'Import Campaign'),
+          importResult && React.createElement('div', { style: { marginTop: '14px' } },
+            importResult.ok ? React.createElement('div', { className: 'card', style: { padding: '14px', background: 'rgba(95,176,120,0.08)' } },
+              React.createElement('div', { className: 'label' }, 'Import Summary'),
+              React.createElement('div', { style: { display: 'flex', gap: '20px', flexWrap: 'wrap', marginTop: '8px' } },
+                React.createElement('div', null, React.createElement('span', { className: 'muted' }, 'Total Rows: '), React.createElement('strong', null, importResult.total_rows)),
+                React.createElement('div', null, React.createElement('span', { className: 'muted' }, 'Imported: '), React.createElement('strong', { style: { color: '#7fd49a' } }, importResult.imported)),
+                React.createElement('div', null, React.createElement('span', { className: 'muted' }, 'Updated: '), React.createElement('strong', { style: { color: 'var(--gold-soft)' } }, importResult.updated)),
+                React.createElement('div', null, React.createElement('span', { className: 'muted' }, 'Skipped: '), React.createElement('strong', null, importResult.skipped))
+              )
+            ) : React.createElement('div', { className: 'message' }, importResult.error || 'Import failed')
+          )
         )
       );
 

@@ -25,6 +25,8 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.documents import Document
 
 from campaign_service import build_active_campaign_context, process_campaign_update
+from campaign_import_service import import_campaign_visitors
+from db import init_db as init_campaign_db
 from database import (
     add_visitor_question,
     change_admin_password,
@@ -654,6 +656,7 @@ async def startup_event():
     global qa_chain
 
     init_db()
+    init_campaign_db()  # Initialize campaigns.db (SQLAlchemy layer)
 
     # Remove DB records for files that were deleted manually (not via the API)
     removed = cleanup_orphaned_file_records()
@@ -1083,6 +1086,20 @@ async def admin_upload_campaign_file(file: UploadFile = File(...)):
         "uploaded_at": file_record["uploaded_at"],
         "message": "Campaign file uploaded successfully",
     }
+
+
+@app.post("/admin/campaign/import")
+async def admin_import_campaign():
+    """Import all visitors from the uploaded Campaign List Excel file."""
+    try:
+        result = await asyncio.to_thread(import_campaign_visitors)
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Import failed: {e}") from e
 
 
 @app.post("/admin/settings/upload/calendar")

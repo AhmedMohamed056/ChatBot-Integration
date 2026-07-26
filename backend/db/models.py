@@ -326,3 +326,40 @@ class VisitorQuestion(Base):
         return (
             f"<VisitorQuestion(id={self.id}, answered={self.answered})>"
         )
+
+
+# ---------------------------------------------------------------------------
+# Campaign Visitor (imported from Excel)
+# ---------------------------------------------------------------------------
+
+
+class CampaignVisitor(TimestampMixin, Base):
+    """A visitor imported from the Campaign List Excel file.
+
+    Each row in the uploaded campaign Excel becomes one record here.
+    The data is used downstream by WhatsApp Campaign Detection,
+    Campaign Update Extraction, AI Context Builder, and Reports.
+    """
+
+    __tablename__ = "campaign_visitors"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    campaign_name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    visitor_name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    phone_number: Mapped[str] = mapped_column(
+        String(50), nullable=False, unique=True
+    )
+
+    __table_args__ = (
+        Index("ix_campaign_visitors_phone_number", "phone_number"),
+        Index("ix_campaign_visitors_campaign_name", "campaign_name"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<CampaignVisitor(id={self.id}, campaign_name={self.campaign_name!r}, "
+            f"visitor_name={self.visitor_name!r}, phone_number={self.phone_number!r})>"
+        )

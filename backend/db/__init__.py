@@ -31,11 +31,13 @@ from db.models import (
     CalendarDay,
     UploadedFile,
     VisitorQuestion,
+    CampaignVisitor,
 )
 from db.repositories import (
     BaseRepository,
     CampaignRepository,
     CampaignUpdateRepository,
+    CampaignVisitorRepository,
     CalendarRepository,
     UploadedFileRepository,
     VisitorQuestionRepository,
@@ -62,10 +64,12 @@ __all__ = [
     "CalendarDay",
     "UploadedFile",
     "VisitorQuestion",
+    "CampaignVisitor",
     # Repositories
     "BaseRepository",
     "CampaignRepository",
     "CampaignUpdateRepository",
+    "CampaignVisitorRepository",
     "CalendarRepository",
     "UploadedFileRepository",
     "VisitorQuestionRepository",
