@@ -26,6 +26,7 @@ from db.models import (  # noqa: F401 – import so models register with Base
     Campaign,
     CampaignUpdate,
     CalendarDay,
+    CalendarEvent,
     UploadedFile,
     VisitorQuestion,
     CampaignVisitor,

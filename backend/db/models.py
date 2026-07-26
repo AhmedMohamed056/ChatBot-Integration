@@ -329,6 +329,50 @@ class VisitorQuestion(Base):
 
 
 # ---------------------------------------------------------------------------
+# Calendar Event (imported from the Calendar Excel file)
+# ---------------------------------------------------------------------------
+
+
+class CalendarEvent(TimestampMixin, Base):
+    """A single event row imported from the uploaded Calendar Excel file.
+
+    Each row in the administrator-uploaded ``Calendar.xlsx`` becomes one
+    record here.  This table is intentionally simple and independent of
+    the :class:`CalendarDay` prayer-times table; it stores only the
+    event information (date, day name, title, time) and is consumed
+    later by the Prayer Time Engine, Relative Date Engine, and AI
+    Context Builder.
+    """
+
+    __tablename__ = "calendar_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    event_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Stored as a free-form string (e.g. "2026-08-01") to preserve the
+    # exact value from the Excel file.
+
+    day_name: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # e.g. "Saturday", "السبت"
+
+    event_title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    event_time: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # e.g. "18:00", "After Maghrib"
+
+    __table_args__ = (
+        Index("ix_calendar_events_event_date", "event_date"),
+        Index("ix_calendar_events_day_name", "day_name"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<CalendarEvent(id={self.id}, event_date={self.event_date!r}, "
+            f"event_title={self.event_title!r})>"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Campaign Visitor (imported from Excel)
 # ---------------------------------------------------------------------------
 

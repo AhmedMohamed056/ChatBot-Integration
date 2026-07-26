@@ -6,10 +6,10 @@ Public API
 - :func:`get_session` – context-managed SQLAlchemy session.
 - :class:`Base` – declarative base for ORM models.
 - Models: :class:`Campaign`, :class:`CampaignUpdate`, :class:`CalendarDay`,
-  :class:`UploadedFile`, :class:`VisitorQuestion`.
+  :class:`CalendarEvent`, :class:`UploadedFile`, :class:`VisitorQuestion`.
 - Repositories: :class:`CampaignRepository`, :class:`CampaignUpdateRepository`,
-  :class:`CalendarRepository`, :class:`UploadedFileRepository`,
-  :class:`VisitorQuestionRepository`.
+  :class:`CalendarRepository`, :class:`CalendarEventRepository`,
+  :class:`UploadedFileRepository`, :class:`VisitorQuestionRepository`.
 
 This package uses a **separate** SQLite database (``campaigns.db``) so
 that the legacy ``app.db`` is not affected.
@@ -29,6 +29,7 @@ from db.models import (
     Campaign,
     CampaignUpdate,
     CalendarDay,
+    CalendarEvent,
     UploadedFile,
     VisitorQuestion,
     CampaignVisitor,
@@ -39,6 +40,7 @@ from db.repositories import (
     CampaignUpdateRepository,
     CampaignVisitorRepository,
     CalendarRepository,
+    CalendarEventRepository,
     UploadedFileRepository,
     VisitorQuestionRepository,
 )
@@ -62,6 +64,7 @@ __all__ = [
     "Campaign",
     "CampaignUpdate",
     "CalendarDay",
+    "CalendarEvent",
     "UploadedFile",
     "VisitorQuestion",
     "CampaignVisitor",
@@ -71,6 +74,7 @@ __all__ = [
     "CampaignUpdateRepository",
     "CampaignVisitorRepository",
     "CalendarRepository",
+    "CalendarEventRepository",
     "UploadedFileRepository",
     "VisitorQuestionRepository",
 ]

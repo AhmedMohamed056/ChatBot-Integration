@@ -28,6 +28,16 @@ from campaign_detection_service import detect_visitor
 from campaign_service import build_active_campaign_context, process_campaign_update
 from campaign_update_extraction_service import extract_campaign_update
 from campaign_import_service import import_campaign_visitors
+from calendar_engine import (
+    CalendarFileNotConfiguredError,
+    CalendarFileNotFoundError,
+    CalendarFileUnsupportedError,
+    CalendarMissingColumnsError,
+    list_all_events as list_calendar_events,
+    load_calendar,
+    search_by_date as search_calendar_by_date,
+    search_by_day as search_calendar_by_day,
+)
 from relative_date_service import resolve_relative_date
 from db import init_db as init_campaign_db
 from database import (
@@ -1237,6 +1247,58 @@ async def admin_upload_calendar_file(file: UploadFile = File(...)):
         "uploaded_at": file_record["uploaded_at"],
         "message": "Calendar file uploaded successfully",
     }
+
+
+# ---------------------------------------------------------------------------
+# Calendar Engine endpoints (Task 7)
+#
+# These endpoints are thin wrappers around the Calendar Engine service in
+# ``calendar_engine.py``.  They contain NO business logic of their own –
+# all parsing, validation and storage happens in the engine.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/admin/calendar/import")
+async def admin_import_calendar():
+    """Load the uploaded Calendar Excel file into the database.
+
+    Returns ``{"ok": true, "events": <int>}``.
+    """
+    try:
+        result = await asyncio.to_thread(load_calendar)
+    except CalendarFileNotConfiguredError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except CalendarFileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except CalendarFileUnsupportedError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except CalendarMissingColumnsError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calendar import failed: {e}") from e
+
+    return {"ok": True, "events": result["events"]}
+
+
+@app.get("/admin/calendar/date/{date}")
+async def admin_calendar_by_date(date: str):
+    """Return all calendar events for the given date (case-insensitive)."""
+    events = await asyncio.to_thread(search_calendar_by_date, date)
+    return {"date": date, "count": len(events), "events": events}
+
+
+@app.get("/admin/calendar/day/{day}")
+async def admin_calendar_by_day(day: str):
+    """Return all calendar events for the given day name (case-insensitive)."""
+    events = await asyncio.to_thread(search_calendar_by_day, day)
+    return {"day": day, "count": len(events), "events": events}
+
+
+@app.get("/admin/calendar/events")
+async def admin_calendar_events():
+    """Return every stored calendar event, ordered by date."""
+    events = await asyncio.to_thread(list_calendar_events)
+    return {"count": len(events), "events": events}
 
 
 @app.post("/admin/settings/change-password")
