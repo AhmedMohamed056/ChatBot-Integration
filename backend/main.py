@@ -45,6 +45,7 @@ from prayer_time_engine import (
     get_today_prayers as get_today_prayers_engine,
 )
 from relative_date_service import resolve_relative_date
+from ai_context_builder import build_context as build_ai_context
 from db import init_db as init_campaign_db
 from database import (
     add_visitor_question,
@@ -172,6 +173,12 @@ class DateResolveRequest(BaseModel):
     """Request body for the relative date resolution test endpoint."""
     date_text: str
     reference_date: str | None = None  # ISO YYYY-MM-DD
+
+
+class ContextBuildRequest(BaseModel):
+    """Request body for the AI Context Builder test endpoint (Task 9)."""
+    message: str
+    phone: str | None = None
 
 
 def list_supported_documents() -> list[dict]:
@@ -1365,6 +1372,29 @@ async def admin_change_password(req: ChangePasswordRequest):
     if not success:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     return {"ok": True, "message": "Password changed successfully"}
+
+
+# ---------------------------------------------------------------------------
+# AI Context Builder endpoint (Task 9)
+#
+# Testing-only endpoint.  It builds a structured, model-agnostic AIContext
+# from an incoming WhatsApp message by orchestrating the existing engines.
+# It does NOT call Gemini / any LLM, does NOT generate prompts or answers,
+# does NOT log visitors, does NOT update the database, and contains NO
+# business logic of its own.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/admin/context/build")
+async def admin_build_context(req: ContextBuildRequest):
+    """Build an AIContext for an incoming WhatsApp message.
+
+    Accepts an optional phone to populate the visitor/campaign sections.
+    Every section of the returned context is optional and may be null
+    or empty.  This endpoint never crashes.
+    """
+    context = await asyncio.to_thread(build_ai_context, req.message, req.phone)
+    return {"context": context.to_dict()}
 
 
 @app.get("/health")
