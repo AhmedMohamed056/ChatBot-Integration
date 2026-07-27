@@ -2,9 +2,11 @@
 
 Implements the Task 10 (Visitor Question Logging) repository contract:
 
-- :meth:`log_question`    - persist a single visitor question.
-- :meth:`list_questions`  - return the latest questions (newest first).
-- :meth:`count_questions` - return the total number of stored questions.
+- :meth:`log_question`           - persist a single visitor question.
+- :meth:`list_questions`         - return the latest questions (newest first).
+- :meth:`list_latest_questions`  - return the latest questions ordered by
+  ``message_timestamp`` (used by the Reports Backend, Task 11).
+- :meth:`count_questions`        - return the total number of stored questions.
 
 Nothing else belongs here.  No reports, analytics, or AI logic.
 """
@@ -82,6 +84,22 @@ class VisitorQuestionRepository(BaseRepository[VisitorQuestion]):
         stmt = (
             select(VisitorQuestion)
             .order_by(VisitorQuestion.created_at.desc(), VisitorQuestion.id.desc())
+            .limit(limit)
+        )
+        return list(self.session.execute(stmt).scalars().all())
+
+    def list_latest_questions(self, limit: int = 50) -> List[VisitorQuestion]:
+        """Return the latest questions ordered by ``message_timestamp``.
+
+        Newest first (by ``message_timestamp`` then ``id``).  Used by the
+        Reports Backend (Task 11) – read-only, no filters or search.
+        """
+        stmt = (
+            select(VisitorQuestion)
+            .order_by(
+                VisitorQuestion.message_timestamp.desc(),
+                VisitorQuestion.id.desc(),
+            )
             .limit(limit)
         )
         return list(self.session.execute(stmt).scalars().all())

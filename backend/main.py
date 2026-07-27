@@ -47,6 +47,7 @@ from prayer_time_engine import (
 from relative_date_service import resolve_relative_date
 from ai_context_builder import build_context as build_ai_context
 from visitor_question_service import log_visitor_question
+import reports_service
 from db import init_db as init_campaign_db
 from db.base import get_session as get_campaign_session
 from db.repositories.visitor_question_repository import VisitorQuestionRepository
@@ -1072,6 +1073,36 @@ async def admin_visitor_questions_report():
         "top_questions": get_top_visitor_questions(),
         "unanswered": get_unanswered_questions(),
     }
+
+
+@app.get("/admin/reports/summary")
+async def admin_reports_summary():
+    """Aggregate summary: campaigns, visitors, calendar events, questions, prayers."""
+    return await asyncio.to_thread(reports_service.get_summary_report)
+
+
+@app.get("/admin/reports/campaigns")
+async def admin_reports_campaigns():
+    """Every campaign with its visitor count."""
+    return await asyncio.to_thread(reports_service.get_campaign_report)
+
+
+@app.get("/admin/reports/questions")
+async def admin_reports_questions():
+    """Latest 50 visitor questions, newest first."""
+    return await asyncio.to_thread(reports_service.get_questions_report, 50)
+
+
+@app.get("/admin/reports/calendar")
+async def admin_reports_calendar():
+    """Total number of calendar events."""
+    return await asyncio.to_thread(reports_service.get_calendar_report)
+
+
+@app.get("/admin/reports/imports")
+async def admin_reports_imports():
+    """Last campaign & calendar import timestamps (from uploaded file info)."""
+    return await asyncio.to_thread(reports_service.get_imports_report)
 
 
 @app.get("/admin/settings")

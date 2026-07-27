@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from db.models import CampaignVisitor
@@ -42,6 +42,27 @@ class CampaignVisitorRepository(BaseRepository[CampaignVisitor]):
             .order_by(CampaignVisitor.visitor_name)
         )
         return list(self.session.execute(stmt).scalars().all())
+
+    def count_by_campaign(self) -> List[dict[str, Any]]:
+        """Return ``[{campaign_name, visitor_count}, ...]`` for every campaign.
+
+        Groups visitors by ``campaign_name`` and returns one row per
+        campaign with the number of visitors.  Used by the Reports
+        Backend (Task 11) – read-only aggregation, no business logic.
+        """
+        stmt = (
+            select(
+                CampaignVisitor.campaign_name.label("campaign_name"),
+                func.count(CampaignVisitor.id).label("visitor_count"),
+            )
+            .group_by(CampaignVisitor.campaign_name)
+            .order_by(CampaignVisitor.campaign_name)
+        )
+        rows = self.session.execute(stmt).all()
+        return [
+            {"campaign_name": row.campaign_name, "visitor_count": int(row.visitor_count)}
+            for row in rows
+        ]
 
     def find_by_phone(self, phone_number: str) -> Optional[dict[str, Any]]:
         """Return a visitor's basic info by phone number, or ``None``.

@@ -1,3 +1,100 @@
+# Task 11 — Reports Backend
+
+## Summary
+
+Implemented the **Reports Backend** — an internal, read-only aggregation
+API layer that collects data already stored in the database and returns it
+for the Admin Dashboard. No AI, no analytics, no charts, no exports. The
+service (`reports_service.py`) is the only place that aggregates data; the
+FastAPI endpoints are thin wrappers.
+
+### Key design decisions
+
+- **Aggregation service only** — `reports_service.py` is responsible only
+  for aggregating data. Endpoints contain no business logic.
+- **Reuse existing repositories** — every read goes through an existing
+  repository (`CampaignRepository`, `CampaignVisitorRepository`,
+  `CalendarEventRepository`, `VisitorQuestionRepository`) or an existing
+  helper in `database.py` (`get_setting`, `get_uploaded_file_record`).
+- **No new tables** — no import-history table; import timestamps are read
+  from the existing `uploaded_files` information keyed by the
+  `campaign_file` / `calendar_file` settings.
+- **Never raises** — when no data exists, returns `0` or `[]`. Every public
+  method wraps its body in `try/except` and returns safe defaults.
+- **No duplicated SQL** — the only new query is a single grouped count
+  added to `CampaignVisitorRepository.count_by_campaign()`; everything
+  else reuses existing repository methods.
+
+---
+
+## New Files
+
+| File | Purpose |
+|---|---|
+| `backend/reports_service.py` | Aggregation service: `get_summary_report()`, `get_campaign_report()`, `get_questions_report()`, `get_calendar_report()`, `get_imports_report()` |
+
+## Modified Files
+
+| File | Change |
+|---|---|
+| `backend/db/repositories/campaign_visitor_repository.py` | Added `count_by_campaign()` — single grouped count query (visitor count per campaign) |
+| `backend/db/repositories/visitor_question_repository.py` | Added `list_latest_questions(limit)` — returns latest questions ordered by `message_timestamp` desc |
+| `backend/main.py` | Imported `reports_service`; added 5 thin report endpoints |
+
+---
+
+## New API Endpoints
+
+| Method | Path | Response |
+|---|---|---|
+| `GET` | `/admin/reports/summary` | `{campaigns:{total_campaigns,total_visitors}, calendar:{total_events}, questions:{total_questions}, prayers:{today_count}}` |
+| `GET` | `/admin/reports/campaigns` | `[{campaign_name, visitor_count}, ...]` |
+| `GET` | `/admin/reports/questions` | Latest 50 questions: `{visitor_name, campaign_name, phone_number, question, detected_language, message_timestamp}` |
+| `GET` | `/admin/reports/calendar` | `{total_events}` |
+| `GET` | `/admin/reports/imports` | `{campaign_import, calendar_import}` (ISO timestamps or `""`) |
+
+---
+
+## Repositories Reused
+
+- `CampaignRepository` — `count()` for total campaigns
+- `CampaignVisitorRepository` — `count()` for total visitors; new
+  `count_by_campaign()` for the campaign report
+- `CalendarEventRepository` — `count()` for total calendar events
+- `VisitorQuestionRepository` — `count()` for total questions; new
+  `list_latest_questions()` for the questions report
+- `database.get_setting()` + `database.get_uploaded_file_record()` — for
+  the imports report (no new import-history table)
+
+---
+
+## Validation Implemented
+
+- All public service methods wrap their bodies in `try/except` and return
+  `0` / `[]` / `""` on any failure — endpoints never throw or crash.
+- Verified with an empty database: summary returns `0` counts, campaign
+  report returns `[]`, questions report returns `[]` (or the stored
+  questions newest-first), calendar report returns `{"total_events": 0}`,
+  imports report returns `{"campaign_import": "", "calendar_import": ""}`.
+
+---
+
+## Confirmation — No Restricted Functionality
+
+The Reports Backend contains **NO**:
+- Analytics / trending / "most common" / "most active" computations
+- AI / Gemini / LLM calls
+- Dashboard UI / charts / graphs / widgets
+- Excel / PDF / CSV export
+- Search / filters / pagination options / sorting options
+- New database tables
+- Duplicated SQL queries
+
+Reports Backend is an **internal API layer only**. The Admin Dashboard UI
+will consume these endpoints later.
+
+---
+
 # Task 7 — Calendar Engine
 
 ## Summary

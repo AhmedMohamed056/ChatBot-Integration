@@ -1,0 +1,48 @@
+"""Quick verification for Task 11 Reports Backend."""
+
+import json
+import sys
+from pathlib import Path
+
+# Ensure backend dir is importable
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import reports_service
+
+
+def main() -> None:
+    print("=== Summary Report ===")
+    summary = reports_service.get_summary_report()
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+    print("\n=== Campaign Report ===")
+    campaigns = reports_service.get_campaign_report()
+    print(json.dumps(campaigns, ensure_ascii=False, indent=2))
+
+    print("\n=== Questions Report ===")
+    questions = reports_service.get_questions_report(50)
+    print(json.dumps(questions, ensure_ascii=False, indent=2))
+
+    print("\n=== Calendar Report ===")
+    calendar = reports_service.get_calendar_report()
+    print(json.dumps(calendar, ensure_ascii=False, indent=2))
+
+    print("\n=== Imports Report ===")
+    imports = reports_service.get_imports_report()
+    print(json.dumps(imports, ensure_ascii=False, indent=2))
+
+    # Basic shape assertions (never throws, returns 0/[] on empty)
+    assert isinstance(summary, dict)
+    assert "campaigns" in summary and "calendar" in summary
+    assert "questions" in summary and "prayers" in summary
+    assert isinstance(campaigns, list)
+    assert isinstance(questions, list)
+    assert isinstance(calendar, dict) and "total_events" in calendar
+    assert isinstance(imports, dict)
+    assert "campaign_import" in imports and "calendar_import" in imports
+
+    print("\nALL CHECKS PASSED")
+
+
+if __name__ == "__main__":
+    main()
