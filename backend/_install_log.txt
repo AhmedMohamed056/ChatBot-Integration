@@ -1,0 +1,10 @@
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting docx2txt
+  Using cached docx2txt-0.9-py3-none-any.whl.metadata (529 bytes)
+Using cached docx2txt-0.9-py3-none-any.whl (4.0 kB)
+Installing collected packages: docx2txt
+Successfully installed docx2txt-0.9
+
+[notice] A new release of pip is available: 24.0 -> 26.1.2
+[notice] To update, run: python.exe -m pip install --upgrade pip
+OK 12369

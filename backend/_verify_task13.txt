@@ -1,0 +1,5 @@
+LENGTH=8754
+SUPERVISOR_FOUND=[]
+VISITOR_MISSING=['المراجعة الذاتية', 'كن مرشدًا لا مجرد مجيب']
+STARTS_WITH='# تعليمات التعامل مع الزائر — معين الزائرين\n\n> هذا الملف هو '
+RESULT=FAIL
