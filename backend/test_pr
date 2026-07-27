@@ -1,0 +1,228 @@
+"""Example tests for the Prayer Time Engine (Task 8).
+
+Run with:
+
+    cd backend
+    python test_prayer_time_engine.py
+
+These tests build a temporary in-memory database, load a small Calendar
+Excel file via the real Calendar Engine (so the Prayer Engine consumes the
+exact same data path used in production), and exercise the four public
+functions plus the configurable alias mapping layer.
+
+No AI, no Excel parsing duplication, no WhatsApp logic – the Prayer Engine
+only consumes the Calendar Engine.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+# Make the backend directory importable when running this file directly.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from openpyxl import Workbook
+
+from db import init_engine, init_db
+import db.base as db_base  # noqa: F401  (ensures module is loaded)
+import calendar_engine as engine
+import prayer_time_engine as prayer_engine
+from current_date_provider import CurrentDateProvider
+
+
+# ---------------------------------------------------------------------------
+# Test helpers
+# ---------------------------------------------------------------------------
+
+
+def _setup_temp_db() -> None:
+    init_engine(":memory:")
+    init_db()
+
+
+def _make_excel(path: Path, rows: list[list], headers: list[str]) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.append(headers)
+    for row in rows:
+        ws.append(row)
+    wb.save(str(path))
+
+
+def _set_calendar_setting(file_path: str) -> None:
+    original = engine.get_setting
+
+    def fake_get_setting(key, default=""):
+        if key == "calendar_file":
+            return file_path
+        return original(key, default)
+
+    engine.get_setting = fake_get_setting  # type: ignore[assignment]
+
+
+def _restore_calendar_setting() -> None:
+    from database import get_setting as real_get_setting
+
+    engine.get_setting = real_get_setting  # type: ignore[assignment]
+
+
+def _load_calendar_with(rows: list[list], today_iso: str) -> CurrentDateProvider:
+    """Load *rows* (for *today_iso*) into the Calendar Engine and return a
+    date provider pinned to *today_iso* at midday (12:00)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        xlsx = Path(tmp) / "calendar.xlsx"
+        _make_excel(xlsx, rows, headers=["Date", "Day", "Event", "Time"])
+        _set_calendar_setting(str(xlsx))
+        engine.load_calendar()
+        _restore_calendar_setting()
+
+    ref_dt = datetime.fromisoformat(f"{today_iso}T12:00:00")
+    return CurrentDateProvider(reference_datetime=ref_dt)
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+def test_alias_mapping_layer() -> None:
+    print("== Configurable alias mapping ==")
+    # Arabic canonical names resolve directly.
+    assert prayer_engine.resolve_canonical_name("الفجر") == "الفجر"
+    # "صلاة الفجر" style resolves to the same canonical prayer.
+    assert prayer_engine.resolve_canonical_name("صلاة الفجر") == "الفجر"
+    # English variant resolves to the same canonical prayer.
+    assert prayer_engine.resolve_canonical_name("Fajr") == "الفجر"
+    # Case-insensitive.
+    assert prayer_engine.resolve_canonical_name("  FAJR  ") == "الفجر"
+    # Unknown title -> None.
+    assert prayer_engine.resolve_canonical_name("Opening Ceremony") is None
+    print("OK  multiple naming styles resolve to one canonical prayer")
+
+
+def test_runtime_alias_extension() -> None:
+    print("\n== Runtime alias extension ==")
+    prayer_engine.PRAYER_NAME_ALIASES["الفجر"].append("صلاة الصبح")
+    prayer_engine.reload_aliases()
+    try:
+        assert prayer_engine.resolve_canonical_name("صلاة الصبح") == "الفجر"
+        print("OK  newly added alias resolves without touching Calendar Engine")
+    finally:
+        prayer_engine.PRAYER_NAME_ALIASES["الفجر"].remove("صلاة الصبح")
+        prayer_engine.reload_aliases()
+
+
+def test_today_prayers_and_variants() -> None:
+    print("\n== Today's prayers + variant titles ==")
+    _setup_temp_db()
+    today = "2026-08-01"
+    provider = _load_calendar_with(
+        [
+            [today, "Saturday", "صلاة الفجر", "05:00"],   # variant title
+            [today, "Saturday", "الشروق", "06:15"],
+            [today, "Saturday", "Dhuhr", "11:30"],        # English variant
+            [today, "Saturday", "العصر", "15:30"],
+            [today, "Saturday", "المغرب", "18:45"],
+            [today, "Saturday", "العشاء", "20:00"],
+            [today, "Saturday", "Opening Ceremony", "21:30"],  # not a prayer
+        ],
+        today,
+    )
+
+    prayers = prayer_engine.get_today_prayers(provider)
+    # 6 prayers, the non-prayer event is filtered out.
+    assert len(prayers) == 6, prayers
+    names = [p["prayer_name"] for p in prayers]
+    assert names == ["الفجر", "الشروق", "الظهر", "العصر", "المغرب", "العشاء"], names
+    print(f"OK  get_today_prayers() -> {names}")
+
+
+def test_get_prayer_by_name() -> None:
+    print("\n== get_prayer by name (case-insensitive, aliases) ==")
+    _setup_temp_db()
+    today = "2026-08-02"
+    provider = _load_calendar_with(
+        [[today, "Sunday", "صلاة المغرب", "18:40"]],
+        today,
+    )
+
+    # Canonical Arabic name.
+    p1 = prayer_engine.get_prayer("المغرب", provider)
+    assert p1 is not None and p1["event_time"] == "18:40", p1
+    # English alias resolves to the same prayer.
+    p2 = prayer_engine.get_prayer("Maghrib", provider)
+    assert p2 is not None and p2["prayer_name"] == "المغرب", p2
+    # Unknown name -> None.
+    assert prayer_engine.get_prayer("NotAPrayer", provider) is None
+    print("OK  get_prayer resolves canonical + alias names")
+
+
+def test_next_and_current_prayer() -> None:
+    print("\n== next + current prayer ==")
+    _setup_temp_db()
+    today = "2026-08-03"
+    # Provider is pinned to midday (12:00). Dhuhr at 11:30 has already
+    # started (current), Asr at 15:30 is the next one.
+    provider = _load_calendar_with(
+        [
+            [today, "Monday", "الفجر", "05:00"],
+            [today, "Monday", "الشروق", "06:15"],
+            [today, "Monday", "الظهر", "11:30"],
+            [today, "Monday", "العصر", "15:30"],
+            [today, "Monday", "المغرب", "18:45"],
+            [today, "Monday", "العشاء", "20:00"],
+        ],
+        today,
+    )
+
+    current = prayer_engine.get_current_prayer(provider)
+    assert current is not None and current["prayer_name"] == "الظهر", current
+
+    nxt = prayer_engine.get_next_prayer(provider)
+    assert nxt is not None and nxt["prayer_name"] == "العصر", nxt
+    print(f"OK  current={current['prayer_name']}, next={nxt['prayer_name']}")
+
+
+def test_no_prayers_today_returns_empty() -> None:
+    print("\n== No prayers today -> empty, never crashes ==")
+    _setup_temp_db()
+    today = "2026-08-04"
+    provider = _load_calendar_with(
+        [[today, "Tuesday", "Workshop", "10:00"]],  # no prayers
+        today,
+    )
+
+    assert prayer_engine.get_today_prayers(provider) == []
+    assert prayer_engine.get_prayer("الفجر", provider) is None
+    assert prayer_engine.get_next_prayer(provider) is None
+    assert prayer_engine.get_current_prayer(provider) is None
+    print("OK  empty responses, no exceptions")
+
+
+def test_engine_never_crashes_without_data() -> None:
+    print("\n== Engine never crashes on empty table ==")
+    _setup_temp_db()
+    provider = CurrentDateProvider(reference_datetime=datetime(2026, 8, 5, 12, 0))
+    assert prayer_engine.get_today_prayers(provider) == []
+    assert prayer_engine.get_next_prayer(provider) is None
+    assert prayer_engine.get_current_prayer(provider) is None
+    print("OK  empty table -> empty/null responses")
+
+
+def main() -> None:
+    test_alias_mapping_layer()
+    test_runtime_alias_extension()
+    test_today_prayers_and_variants()
+    test_get_prayer_by_name()
+    test_next_and_current_prayer()
+    test_no_prayers_today_returns_empty()
+    test_engine_never_crashes_without_data()
+    print("\nAll prayer time engine tests passed.")
+
+
+if __name__ == "__main__":
+    main()

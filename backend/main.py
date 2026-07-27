@@ -38,6 +38,12 @@ from calendar_engine import (
     search_by_date as search_calendar_by_date,
     search_by_day as search_calendar_by_day,
 )
+from prayer_time_engine import (
+    get_current_prayer as get_current_prayer_engine,
+    get_next_prayer as get_next_prayer_engine,
+    get_prayer as get_prayer_engine,
+    get_today_prayers as get_today_prayers_engine,
+)
 from relative_date_service import resolve_relative_date
 from db import init_db as init_campaign_db
 from database import (
@@ -1299,6 +1305,58 @@ async def admin_calendar_events():
     """Return every stored calendar event, ordered by date."""
     events = await asyncio.to_thread(list_calendar_events)
     return {"count": len(events), "events": events}
+
+
+# ---------------------------------------------------------------------------
+# Prayer Time Engine endpoints (Task 8)
+#
+# These endpoints are thin wrappers around the Prayer Time Engine in
+# ``prayer_time_engine.py``.  The Prayer Engine consumes the Calendar Engine
+# (it never reads Excel or duplicates parsing).  They contain NO business
+# logic of their own and never crash.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/admin/prayers/today")
+async def admin_prayers_today():
+    """Return all of today's prayers.
+
+    Returns an empty response (never an error) if today's calendar has no
+    prayers.
+    """
+    prayers = await asyncio.to_thread(get_today_prayers_engine)
+    return {"count": len(prayers), "prayers": prayers}
+
+
+@app.get("/admin/prayers/next")
+async def admin_next_prayer():
+    """Return the next upcoming prayer today (or null if none remain)."""
+    prayer = await asyncio.to_thread(get_next_prayer_engine)
+    return {"prayer": prayer}
+
+
+@app.get("/admin/prayers/current")
+async def admin_current_prayer():
+    """Return the current/active prayer today (or null if none has started)."""
+    prayer = await asyncio.to_thread(get_current_prayer_engine)
+    return {"prayer": prayer}
+
+
+@app.get("/admin/prayers/{name}")
+async def admin_prayer_by_name(name: str):
+    """Return today's prayer matching *name* (case-insensitive).
+
+    The name may be any alias (e.g. "الفجر", "صلاة الفجر", "Fajr").  Returns
+    404 if the name does not resolve to a known prayer or today has no such
+    prayer.
+
+    NOTE: This dynamic route is registered *after* the static ``next`` and
+    ``current`` routes so FastAPI matches those first.
+    """
+    prayer = await asyncio.to_thread(get_prayer_engine, name)
+    if prayer is None:
+        raise HTTPException(status_code=404, detail=f"Prayer '{name}' not found")
+    return {"prayer": prayer}
 
 
 @app.post("/admin/settings/change-password")

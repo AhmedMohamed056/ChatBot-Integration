@@ -1,3 +1,114 @@
+# Task 7 — Calendar Engine
+
+## Summary
+
+Implemented the **Calendar Engine** — an independent service that reads the
+administrator-uploaded Calendar Excel file (`calendar_file` setting),
+validates it, converts every row into a Calendar Event, stores them in a new
+`calendar_events` table, and exposes search APIs. The engine is fully
+decoupled from FastAPI; the API endpoints are thin wrappers that only call
+the service.
+
+### Key design decisions
+
+- **No hardcoded paths** — the file path is read from the `calendar_file`
+  system setting (uploaded via Settings).
+- **Flexible parser** — column matching is case-insensitive and
+  whitespace-trimmed; the four required columns (`Date`, `Day`, `Event`,
+  `Time`) are detected by name, and any extra columns are safely ignored.
+- **Independent table** — `calendar_events` is separate from the
+  `calendar_days` prayer-times table; the engine does not touch prayer
+  times, Hijri dates, or any other concern.
+- **Replace-on-import** — every import fully replaces the table so it
+  always mirrors the latest uploaded file.
+- **Never crashes** — invalid/empty rows are skipped; search APIs return
+  empty lists on any error.
+
+---
+
+## New Files
+
+| File | Purpose |
+|---|---|
+| `backend/calendar_engine.py` | Calendar Engine service: `load_calendar()`, `search_by_date()`, `search_by_day()`, `list_all_events()` + typed errors |
+| `backend/db/repositories/calendar_event_repository.py` | `CalendarEventRepository` (CRUD + date/day lookups + bulk replace) |
+| `backend/test_calendar_engine.py` | Example tests (load, search, case-insensitive headers, extra columns, skip invalid rows, missing columns/file/config rejected, never-crash search) |
+
+## Modified Files
+
+| File | Change |
+|---|---|
+| `backend/db/models.py` | Added `CalendarEvent` model (`calendar_events` table) |
+| `backend/db/repositories/__init__.py` | Exported `CalendarEventRepository` |
+| `backend/db/__init__.py` | Exported `CalendarEvent` model + `CalendarEventRepository` |
+| `backend/db/init_db.py` | Imported `CalendarEvent` so it registers with `Base.metadata` |
+| `backend/main.py` | Imported the engine; added 4 calendar endpoints |
+
+---
+
+## New Database Object
+
+### Table `calendar_events` (in `campaigns.db`)
+`id`, `event_date`, `day_name`, `event_title`, `event_time`, `created_at`, `updated_at`
++ indexes on `event_date` and `day_name`.
+
+---
+
+## New Service
+
+`backend/calendar_engine.py` — public functions:
+- `load_calendar()` → `{"ok": True, "events": <int>, "skipped": <int>}`
+- `search_by_date(date)` → list of event dicts
+- `search_by_day(day)` → list of event dicts
+- `list_all_events()` → list of event dicts
+
+Typed errors: `CalendarFileNotConfiguredError`,
+`CalendarFileNotFoundError`, `CalendarFileUnsupportedError`,
+`CalendarMissingColumnsError`.
+
+---
+
+## New API Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/admin/calendar/import` | Load the uploaded calendar; returns `{"ok": true, "events": <int>}` |
+| `GET` | `/admin/calendar/date/{date}` | Search events by date (case-insensitive) |
+| `GET` | `/admin/calendar/day/{day}` | Search events by day name (case-insensitive) |
+| `GET` | `/admin/calendar/events` | List all stored events |
+
+---
+
+## Validation
+
+- Rejects missing file (404), unsupported extension (400), missing required
+  columns (400), and unconfigured calendar (400).
+- Skips empty rows and rows without an event title.
+- Search APIs never raise — they return `[]` on any failure.
+
+---
+
+## Confirmation — No Restricted Logic
+
+The Calendar Engine contains **NO**:
+- Prayer Time logic
+- AI / Gemini / LLM calls
+- Context Builder logic
+- WhatsApp logic
+- Relative Date logic (no duplication)
+- Reports / Campaign Updates / Visitor Questions logic
+
+(Verified by regex search — the only mentions are in the module docstring
+explicitly stating these are NOT implemented.)
+
+---
+
+## Verification
+
+`cd backend && python test_calendar_engine.py` — all tests pass ✅
+
+---
+
 # Campaigns Page — Read-Only Implementation
 
 ## Summary
