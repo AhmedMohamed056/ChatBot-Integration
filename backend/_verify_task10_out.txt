@@ -1,0 +1,14 @@
+[OK] main.py syntax valid
+[OK] init_db() done. schema_version=2
+[INFO] visitor_questions columns: ['campaign_name', 'created_at', 'detected_language', 'id', 'message_timestamp', 'phone_number', 'question', 'visitor_name']
+[OK] visitor_questions schema matches Task 10 spec exactly
+[INFO] indexes: ['ix_visitor_questions_campaign_name', 'ix_visitor_questions_message_timestamp', 'ix_visitor_questions_phone_number']
+[OK] detect_language heuristic works (ar/en/unknown)
+[OK] logged arabic question id=1
+[OK] logged english question (no phone) id=2
+[OK] empty question raised ValueError
+[OK] count_questions=2, list_questions returned 2
+[INFO] latest question dict keys: ['campaign_name', 'created_at', 'detected_language', 'id', 'message_timestamp', 'phone_number', 'question', 'visitor_name']
+[OK] both API endpoints present in main.py
+
+=== ALL VERIFICATIONS PASSED ===

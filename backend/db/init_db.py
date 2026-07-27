@@ -35,7 +35,7 @@ from db.models import (  # noqa: F401 – import so models register with Base
 logger = logging.getLogger(__name__)
 
 #: Current schema version.  Increment when a migration is added.
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 _SCHEMA_VERSION_TABLE = "schema_version"
 
@@ -133,22 +133,31 @@ def set_schema_version(version: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Migration runner (placeholder for future migrations)
+# Migration runner
 # ---------------------------------------------------------------------------
 
 
 def _run_migrations(from_version: int) -> None:
     """Apply incremental migrations from *from_version* to current.
 
-    Currently a no-op because we're at version 1.  Future migrations
-    should be added as ``if from_version < N: ...`` blocks.
+    Migrations are applied in order as ``if from_version < N: ...`` blocks.
     """
-    # Example for future use:
-    # if from_version < 2:
-    #     engine = _get_engine()
-    #     with engine.begin() as conn:
-    #         conn.execute(text("ALTER TABLE campaigns ADD COLUMN new_col TEXT"))
-    #     set_schema_version(2)
+    engine = _get_engine()
+
+    # Migration 2: rebuild the ``visitor_questions`` table to match the
+    # Task 10 schema (phone_number, visitor_name, campaign_name, question,
+    # detected_language, message_timestamp, created_at).  The previous
+    # schema had different columns (detected_campaign, ai_answer, answered,
+    # campaign_id FK).  SQLite cannot drop columns cheaply, so we drop and
+    # recreate the table.  Existing logged questions are discarded because
+    # they used the old (pre-Task-10) schema.
+    if from_version < 2:
+        logger.info("Migration 2: rebuilding visitor_questions table")
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS visitor_questions"))
+        # Recreate the table from the current model definition.
+        VisitorQuestion.__table__.create(bind=engine, checkfirst=True)
+        set_schema_version(2)
 
     set_schema_version(CURRENT_SCHEMA_VERSION)
     logger.info("Migrations applied – now at schema version %d", CURRENT_SCHEMA_VERSION)

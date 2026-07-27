@@ -46,7 +46,10 @@ from prayer_time_engine import (
 )
 from relative_date_service import resolve_relative_date
 from ai_context_builder import build_context as build_ai_context
+from visitor_question_service import log_visitor_question
 from db import init_db as init_campaign_db
+from db.base import get_session as get_campaign_session
+from db.repositories.visitor_question_repository import VisitorQuestionRepository
 from database import (
     add_visitor_question,
     change_admin_password,
@@ -179,6 +182,12 @@ class ContextBuildRequest(BaseModel):
     """Request body for the AI Context Builder test endpoint (Task 9)."""
     message: str
     phone: str | None = None
+
+
+class VisitorQuestionLogRequest(BaseModel):
+    """Request body for the Visitor Question Logging test endpoint (Task 10)."""
+    phone_number: str | None = None
+    message: str
 
 
 def list_supported_documents() -> list[dict]:
@@ -1395,6 +1404,52 @@ async def admin_build_context(req: ContextBuildRequest):
     """
     context = await asyncio.to_thread(build_ai_context, req.message, req.phone)
     return {"context": context.to_dict()}
+
+
+# ---------------------------------------------------------------------------
+# Visitor Question Logging endpoints (Task 10)
+#
+# Testing-only endpoints.  They store every incoming visitor question and
+# return the latest stored questions.  No reports, analytics, or AI logic.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/admin/questions/log")
+async def admin_log_visitor_question(req: VisitorQuestionLogRequest):
+    """Log a single visitor question.
+
+    Normalises the phone number, detects the visitor (if possible), detects
+    the language via a simple heuristic, and stores the question.  Never
+    fails because detection failed.
+    """
+    if not req.message or not req.message.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+
+    try:
+        result = await asyncio.to_thread(
+            log_visitor_question, req.phone_number, req.message
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Logging failed: {e}") from e
+
+    return {"ok": True}
+
+
+@app.get("/admin/questions")
+async def admin_list_visitor_questions():
+    """Return the latest visitor questions (newest first).
+
+    Simple list with no pagination, search, or filters.
+    """
+    with get_campaign_session() as session:
+        repo = VisitorQuestionRepository(session)
+        questions = repo.list_questions(limit=50)
+        return {
+            "count": len(questions),
+            "questions": [repo.to_dict(q) for q in questions],
+        }
 
 
 @app.get("/health")

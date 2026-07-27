@@ -97,12 +97,6 @@ class Campaign(TimestampMixin, Base):
         order_by="CampaignUpdate.created_at.desc()",
     )
 
-    visitor_questions: Mapped[List["VisitorQuestion"]] = relationship(
-        "VisitorQuestion",
-        back_populates="campaign",
-        order_by="VisitorQuestion.created_at.desc()",
-    )
-
     __table_args__ = (
         UniqueConstraint("campaign_name", name="uq_campaigns_campaign_name"),
         Index("ix_campaigns_status", "status"),
@@ -280,51 +274,57 @@ class UploadedFile(Base):
 
 
 class VisitorQuestion(Base):
-    """Store every visitor question asked to the chatbot."""
+    """Store every visitor question asked to the chatbot.
+
+    Fields (Task 10 – Visitor Question Logging):
+    - ``id``                 – primary key
+    - ``phone_number``       – normalised WhatsApp number (nullable)
+    - ``visitor_name``       – detected visitor name (nullable)
+    - ``campaign_name``      – detected campaign name (nullable)
+    - ``question``           – the question text (required)
+    - ``detected_language``  – ``"ar"``, ``"en"`` or ``"unknown"``
+    - ``message_timestamp``  – when the message was received
+    - ``created_at``         – when the row was stored
+    """
 
     __tablename__ = "visitor_questions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     phone_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    # WhatsApp number if the question came via WhatsApp; ``None`` for web.
+    # Normalised WhatsApp number; ``None`` when phone is missing.
+
+    visitor_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Detected visitor name from Campaign Detection (nullable).
+
+    campaign_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Detected campaign name from Campaign Detection (nullable).
 
     question: Mapped[str] = mapped_column(Text, nullable=False)
 
-    detected_campaign: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    # Name of the campaign the question was detected to relate to.
+    detected_language: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="unknown"
+    )
+    # Simple heuristic result: ``"ar"``, ``"en"`` or ``"unknown"``.
 
-    ai_answer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    answered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    message_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    # When the WhatsApp message was received.
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
 
-    # Optional FK to campaigns (nullable because not every question
-    # relates to a campaign).
-    campaign_id: Mapped[Optional[int]] = mapped_column(
-        Integer,
-        ForeignKey("campaigns.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-
-    # Relationships ---------------------------------------------------------
-    campaign: Mapped[Optional["Campaign"]] = relationship(
-        "Campaign", back_populates="visitor_questions"
-    )
-
     __table_args__ = (
         Index("ix_visitor_questions_phone_number", "phone_number"),
-        Index("ix_visitor_questions_answered", "answered"),
-        Index("ix_visitor_questions_created_at", "created_at"),
-        Index("ix_visitor_questions_campaign_id", "campaign_id"),
+        Index("ix_visitor_questions_campaign_name", "campaign_name"),
+        Index("ix_visitor_questions_message_timestamp", "message_timestamp"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
-            f"<VisitorQuestion(id={self.id}, answered={self.answered})>"
+            f"<VisitorQuestion(id={self.id}, detected_language={self.detected_language!r})>"
         )
 
 
