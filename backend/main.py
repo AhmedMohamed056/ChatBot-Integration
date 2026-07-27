@@ -46,6 +46,7 @@ from prayer_time_engine import (
 )
 from relative_date_service import resolve_relative_date
 from ai_context_builder import build_context as build_ai_context
+from prompt_builder import build_prompt
 from visitor_question_service import log_visitor_question
 import reports_service
 from db import init_db as init_campaign_db
@@ -189,6 +190,12 @@ class VisitorQuestionLogRequest(BaseModel):
     """Request body for the Visitor Question Logging test endpoint (Task 10)."""
     phone_number: str | None = None
     message: str
+
+
+class PromptBuildRequest(BaseModel):
+    """Request body for the Prompt Builder test endpoint (Task 12)."""
+    system_prompt: str = ""
+    context: dict | None = None
 
 
 def list_supported_documents() -> list[dict]:
@@ -1435,6 +1442,30 @@ async def admin_build_context(req: ContextBuildRequest):
     """
     context = await asyncio.to_thread(build_ai_context, req.message, req.phone)
     return {"context": context.to_dict()}
+
+
+# ---------------------------------------------------------------------------
+# Prompt Builder endpoint (Task 12)
+#
+# Testing-only endpoint.  It composes the final System Prompt by combining
+# a static System Prompt (stored in Settings) with an AIContext (Task 9)
+# into a single prompt string.  It does NOT call Gemini / any LLM, does NOT
+# generate answers, does NOT read the database, and contains NO business
+# logic of its own — everything must already exist inside the supplied
+# AIContext.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/admin/prompt/build")
+async def admin_build_prompt(req: PromptBuildRequest):
+    """Compose the final System Prompt from a static prompt + AIContext.
+
+    Accepts a ``system_prompt`` string and a ``context`` dict (the shape
+    produced by ``AIContext.to_dict()``).  Returns ``{"prompt": "..."}``.
+    Never crashes; missing sections are omitted entirely.
+    """
+    prompt = await asyncio.to_thread(build_prompt, req.system_prompt, req.context)
+    return {"prompt": prompt}
 
 
 # ---------------------------------------------------------------------------
