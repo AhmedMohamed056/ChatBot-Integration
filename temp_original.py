@@ -9,15 +9,14 @@ machine. It depends on:
 
 It intentionally has NO integration with:
 
+- Archive
 - Gemini
 - Prompt Builder
 - Visitor Flow
 - WhatsApp
 - Any API or database
 - Advertisement Merge Logic
-
-It integrates with:
-- Archive (saves advertisements to AdvertisementArchive after approval)
+- Approval Persistence
 
 The flow is a strict linear state machine:
 
@@ -57,22 +56,8 @@ Usage:
     # result.reply -> "فهمت أن هذا الإعلان (UPDATE). هل هذا صحيح؟"
 """
 
-import sys
-from pathlib import Path
-
-# Add parent directory to path for imports when running as script
-file_path = Path(__file__).resolve()
-parent_dir = file_path.parent.parent
-if str(parent_dir) not in sys.path:
-    sys.path.insert(0, str(parent_dir))
-
 from dataclasses import dataclass
-from datetime import datetime
 
-from backend.advertisement_archive import (
-    AdvertisementArchive,
-    AdvertisementRecord,
-)
 from backend.advertisement_type_detector import (
     AdvertisementType,
     detect_advertisement_type,
@@ -150,7 +135,6 @@ class SupervisorFlow:
             )
 
         self._state_manager = state_manager
-        self.archive = AdvertisementArchive()
 
     # ------------------------------------------------------------------
     # Public API (single entry point)
@@ -263,37 +247,15 @@ class SupervisorFlow:
     def _handle_waiting_approval(self, phone, message):
         """SUPERVISOR_WAITING_APPROVAL -> NORMAL_CHAT.
 
-        Records the approval response, saves the advertisement to archive,
-        returns to NORMAL_CHAT, and replies with the success message.
+        Records the approval response, returns to NORMAL_CHAT, and
+        replies with the success message.
         """
-        # Get temporary data stored during the flow
-        data = self._state_manager.get_data(phone)
-
-        # Create AdvertisementRecord from stored data
-        record = AdvertisementRecord(
-            campaign_name=data.get("campaign_name", ""),
-            supervisor_name=data.get("supervisor_name", ""),
-            phone_number=phone,
-            original_announcement=data.get("announcement_text", ""),
-            final_announcement=data.get("announcement_text", ""),
-            advertisement_type=data.get("announcement_type", AdvertisementType.UNKNOWN),
-            attachments=data.get("attachments", []),
-            sent_at=datetime.now(),
-            approved_at=datetime.now(),
-            change_summary=data.get("change_summary", ""),
-        )
-
-        # Save to archive
-        self.archive.save(record)
-
-        # Update approval data
         self._state_manager.update_data(
             phone,
             {"approval_response": message, "approved": True},
         )
 
         self._state_manager.set_state(phone, ConversationState.NORMAL_CHAT)
-        self._state_manager.clear_data(phone)
 
         return SupervisorFlowResult(
             reply=APPROVAL_SUCCESS_REPLY,
@@ -309,12 +271,6 @@ if __name__ == "__main__":
     manager = ConversationStateManager()
     flow = SupervisorFlow(manager)
     phone = "201001111111"
-
-    # Set campaign and supervisor info before entering the flow
-    manager.update_data(phone, {
-        "campaign_name": "Ramadan Campaign 2024",
-        "supervisor_name": "Ahmed Supervisor",
-    })
 
     # ------------------------------------------------------------------
     # Scenario 1: NORMAL_CHAT -> enter flow -> WAITING_ANNOUNCEMENT
@@ -352,33 +308,13 @@ if __name__ == "__main__":
     assert r.next_state == ConversationState.SUPERVISOR_WAITING_APPROVAL
 
     # ------------------------------------------------------------------
-    # Scenario 4: approve -> NORMAL_CHAT + save to archive
+    # Scenario 4: approve -> NORMAL_CHAT
     # ------------------------------------------------------------------
     print("\n=== Scenario 4: approve ===")
     r = flow.handle_message(phone, "نعم اعتمد")
     print("state:", r.next_state.name, "| reply:", r.reply, "| handled:", r.handled)
     assert r.next_state == ConversationState.NORMAL_CHAT
     assert r.reply == APPROVAL_SUCCESS_REPLY
-
-    # Verify archive contains the saved record
-    print("\n=== Archive verification ===")
-    print(f"Archive contains: {len(flow.archive._records)} record(s)")
-    assert len(flow.archive._records) == 1
-
-    # Get history for the campaign
-    history = flow.archive.get_history("Ramadan Campaign 2024")
-    print(f"History for 'Ramadan Campaign 2024': {len(history)} record(s)")
-    assert len(history) == 1
-
-    record = history[0]
-    print(f"  Campaign: {record.campaign_name}")
-    print(f"  Supervisor: {record.supervisor_name}")
-    print(f"  Type: {record.advertisement_type.value}")
-    print(f"  Phone: {record.phone_number}")
-    assert record.campaign_name == "Ramadan Campaign 2024"
-    assert record.supervisor_name == "Ahmed Supervisor"
-    assert record.phone_number == phone
-    assert record.advertisement_type == AdvertisementType.UPDATE
 
     # ------------------------------------------------------------------
     # After completion: NORMAL_CHAT is not handled by the supervisor flow
