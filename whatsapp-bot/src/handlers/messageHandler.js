@@ -1,7 +1,8 @@
 const config = require('../config');
 const logger = require('../utils/logger');
-const ragClient = require('../ragClient');
-const { shouldProcessGroupMessage } = require('../middleware/groupFilter');
+const { spawn } = require('child_process');
+const path = require('path');
+const { isGroupMessage, shouldProcessGroupMessage } = require('../middleware/groupFilter');
 const {
   extractPrompt,
   hasCommandPrefix,
@@ -14,72 +15,7 @@ function normalizePhone(value) {
   return String(value).split('@')[0].replace(/\D/g, '');
 }
 
-async function tryCampaignUpdate(message) {
-  const phone = normalizePhone(message.author || message.from);
-  const body = typeof message?.body === 'string' ? message.body.trim() : '';
 
-  if (!phone || !body) {
-    return false;
-  }
-
-  try {
-    const response = await ragClient.post('/campaign/update', {
-      phone,
-      message: body,
-    });
-
-    if (response?.data?.ok) {
-      if (response.data.stored) {
-        await message.reply('تم حفظ تحديث الحملة.');
-      }
-      logger.info('Campaign update processed.', {
-        phone,
-        stored: response.data.stored,
-        reason: response.data.reason,
-      });
-      return true;
-    }
-  } catch (error) {
-    if (error?.response?.status === 404) {
-      return false;
-    }
-    logger.error('Campaign update request failed.', {
-      phone,
-      error: error.message,
-    });
-  }
-
-  return false;
-}
-
-function parseLearnCommand(body) {
-  const trimmed = typeof body === 'string' ? body.trim() : '';
-
-  if (!trimmed.toLowerCase().startsWith('!learn')) {
-    return null;
-  }
-
-  const payload = trimmed.replace(/^!learn\b/i, '').trim();
-
-  if (!payload) {
-    return null;
-  }
-
-  const separatorMatch = payload.match(/^(.*?)(?:\s*\|\s*|\s*=>\s*)(.*)$/s);
-
-  if (!separatorMatch) {
-    return null;
-  }
-
-  const question = separatorMatch[1].trim();
-  const answer = separatorMatch[2].trim();
-
-  if (!question || !answer) {
-    return null;
-  }
-
-  return { question, answer };
-}
 
 async function handleIncomingMessage(message, client) {
   try {
@@ -95,80 +31,80 @@ async function handleIncomingMessage(message, client) {
       fromMe: message?.fromMe,
     });
 
-    if (await tryCampaignUpdate(message)) {
-      return;
-    }
+    // Check if this is a private chat (not a group)
+    const isPrivateChat = !(await isGroupMessage(message));
 
-    if (!(await shouldProcessGroupMessage(message))) {
-      return;
-    }
+    // For private chats: ALWAYS process, no filters required
+    if (isPrivateChat) {
+      logger.info('Private chat message - processing immediately without filters.');
+    } else {
+      // For group chats: apply existing group filters
+      if (!(await shouldProcessGroupMessage(message))) {
+        return;
+      }
 
-    const mentioned = await isBotMentioned(message, client);
-    const shouldRespond = await shouldRespondToMessage(message, client);
+      const mentioned = await isBotMentioned(message, client);
+      const shouldRespond = await shouldRespondToMessage(message, client);
 
-    logger.info('Group message trigger check.', {
-      groupId: message.from,
-      mentioned,
-      hasPrefix: hasCommandPrefix(message),
-      shouldRespond,
-    });
-
-    if (!shouldRespond) {
-      return;
-    }
-
-    const rawBody = typeof message?.body === 'string' ? message.body.trim() : '';
-    const learnCommand = parseLearnCommand(rawBody);
-
-    if (learnCommand) {
-      const response = await ragClient.post('/learn', {
-        question: learnCommand.question,
-        answer: learnCommand.answer,
-        source: 'whatsapp_admin',
-      });
-
-      const reply = response?.data?.message || 'Knowledge saved successfully.';
-      await message.reply(reply);
-      logger.info('WhatsApp knowledge saved.', {
+      logger.info('Group message trigger check.', {
         groupId: message.from,
-        author: message.author || message.from,
-        question: learnCommand.question,
+        mentioned,
+        hasPrefix: hasCommandPrefix(message),
+        shouldRespond,
       });
+
+      if (!shouldRespond) {
+        return;
+      }
+    }
+
+    const phone = normalizePhone(message.author || message.from);
+    const text = typeof message?.body === 'string' ? message.body.trim() : '';
+
+    if (!phone || !text) {
       return;
     }
 
-    const prompt = extractPrompt(message);
+    // Call the Python handle_incoming_message function
+    const pythonExecutable = process.env.PYTHON_EXECUTABLE || "python";
+    const pythonScript = path.join(__dirname, '..', 'whatsapp_handler.py');
+    const pythonProcess = spawn(pythonExecutable, [pythonScript, phone, text]);
 
-    if (!prompt) {
-      await message.reply(
-        `Hi! Mention me or use ${config.BOT_PREFIX} with your question.\nExample: @${config.BOT_NAME} what is your return policy?\nOr: ${config.BOT_PREFIX} what is your return policy?`,
-      );
-      return;
-    }
+    let reply = '';
+    let errorOutput = '';
 
-    logger.info('Processing group message.', {
-      groupId: message.from,
-      author: message.author || message.from,
-      prompt,
+    pythonProcess.stdout.on('data', (data) => {
+      reply += data.toString();
     });
 
-    const response = await ragClient.post('/chat', {
-      message: prompt,
-      session_id: message.author || message.from,
-      source: 'whatsapp',
+    pythonProcess.stderr.on('data', (data) => {
+      errorOutput += data.toString();
     });
 
-    const reply = response?.data?.reply;
+    await new Promise((resolve, reject) => {
+      pythonProcess.on('close', (code) => {
+        if (errorOutput) {
+          logger.error('Python subprocess stderr:', { data: errorOutput });
+        }
+        if (code !== 0) {
+          logger.error('Python subprocess failed.', { code });
+          reject(new Error(`Python subprocess failed with code ${code}`));
+        } else {
+          resolve();
+        }
+      });
+    });
 
+    // Send the reply back to WhatsApp
     if (reply) {
-      await message.reply(reply);
-      logger.info('Group reply sent.', {
+      await message.reply(reply.trim());
+      logger.info('Reply sent to WhatsApp.', {
         groupId: message.from,
         author: message.author || message.from,
       });
     }
   } catch (error) {
-    logger.error('Failed to process group message.', {
+    logger.error('Failed to process message.', {
       error: error.message,
       groupId: message?.from,
       author: message?.author || message?.from,

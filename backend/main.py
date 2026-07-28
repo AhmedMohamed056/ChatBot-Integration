@@ -151,6 +151,10 @@ class CampaignUpdateRequest(BaseModel):
     phone: str
     message: str
 
+class MessageRequest(BaseModel):
+    phone: str
+    message: str
+
 
 class SettingsUpdateRequest(BaseModel):
     bot_name: str | None = None
@@ -1513,6 +1517,33 @@ async def admin_list_visitor_questions():
             "questions": [repo.to_dict(q) for q in questions],
         }
 
+
+from conversation_router import ConversationRouter
+
+@app.post("/message")
+async def message(req: MessageRequest):
+    """
+    Entry point for WhatsApp messages.
+
+    Routes messages through ConversationRouter which forwards to VisitorFlow.
+
+    Flow:
+        HTTP POST /message
+            ↓
+        ConversationRouter
+            ↓
+        VisitorFlow
+            ↓
+        Gemini
+            ↓
+        HTTP Response
+    """
+    router = ConversationRouter()
+    reply = router.route_message(
+        phone=req.phone,
+        message=req.message
+    )
+    return {"reply": reply}
 
 @app.get("/health")
 async def health():
