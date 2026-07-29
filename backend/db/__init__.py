@@ -34,6 +34,27 @@ from db.models import (
     VisitorQuestion,
     CampaignVisitor,
 )
+from db.platform_models import (
+    AdminSession,
+    AdminUser,
+    AdminUserRole,
+    AuditEvent,
+    CampaignVersion,
+    Conversation,
+    ConversationMemory,
+    ConversationState,
+    IdempotencyKey,
+    ImportBatch,
+    Message,
+    OutboxEvent,
+    Permission,
+    PrayerTime,
+    RagDocument,
+    RagIndexManifest,
+    Role,
+    RolePermission,
+    Supervisor,
+)
 from db.repositories import (
     BaseRepository,
     CampaignRepository,
@@ -44,7 +65,13 @@ from db.repositories import (
     UploadedFileRepository,
     VisitorQuestionRepository,
 )
-from db.init_db import init_db, drop_all, get_schema_version, set_schema_version
+from db.init_db import (
+    drop_all,
+    get_schema_version,
+    init_db,
+    set_schema_version,
+    upgrade_database,
+)
 
 __all__ = [
     # Base infrastructure
@@ -54,6 +81,7 @@ __all__ = [
     "get_session",
     "init_engine",
     "init_db",
+    "upgrade_database",
     "drop_all",
     "get_schema_version",
     "set_schema_version",
@@ -68,6 +96,25 @@ __all__ = [
     "UploadedFile",
     "VisitorQuestion",
     "CampaignVisitor",
+    "Supervisor",
+    "CampaignVersion",
+    "Conversation",
+    "Message",
+    "ConversationState",
+    "ConversationMemory",
+    "ImportBatch",
+    "PrayerTime",
+    "RagDocument",
+    "RagIndexManifest",
+    "AuditEvent",
+    "OutboxEvent",
+    "IdempotencyKey",
+    "AdminUser",
+    "AdminSession",
+    "Role",
+    "Permission",
+    "AdminUserRole",
+    "RolePermission",
     # Repositories
     "BaseRepository",
     "CampaignRepository",

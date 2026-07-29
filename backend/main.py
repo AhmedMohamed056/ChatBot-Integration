@@ -154,6 +154,9 @@ class CampaignUpdateRequest(BaseModel):
 class MessageRequest(BaseModel):
     phone: str
     message: str
+    chat_type: str = "private"
+    external_chat_id: str | None = None
+    external_message_id: str | None = None
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -1195,6 +1198,26 @@ async def admin_import_campaign():
         raise HTTPException(status_code=500, detail=f"Import failed: {e}") from e
 
 
+@app.get("/admin/supervisors/import/preview")
+async def admin_preview_supervisor_import():
+    try:
+        from services.supervisor_import_service import preview_supervisor_import
+
+        return await asyncio.to_thread(preview_supervisor_import)
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/admin/supervisors/import/activate")
+async def admin_activate_supervisor_import():
+    try:
+        from services.supervisor_import_service import activate_supervisor_import
+
+        return await asyncio.to_thread(activate_supervisor_import)
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @app.post("/admin/campaign/detect")
 async def admin_detect_campaign(req: CampaignDetectRequest):
     """Detect whether a WhatsApp phone number belongs to a known campaign visitor.
@@ -1541,7 +1564,10 @@ async def message(req: MessageRequest):
     router = ConversationRouter()
     reply = router.route_message(
         phone=req.phone,
-        message=req.message
+        message=req.message,
+        chat_type=req.chat_type,
+        external_chat_id=req.external_chat_id,
+        external_message_id=req.external_message_id,
     )
     return {"reply": reply}
 

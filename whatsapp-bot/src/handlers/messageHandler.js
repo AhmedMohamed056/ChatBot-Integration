@@ -1,10 +1,8 @@
 const config = require('../config');
 const logger = require('../utils/logger');
-const { spawn } = require('child_process');
-const path = require('path');
+const { postInboundMessage } = require('../services/backendService');
 const { isGroupMessage, shouldProcessGroupMessage } = require('../middleware/groupFilter');
 const {
-  extractPrompt,
   hasCommandPrefix,
   isBotMentioned,
   shouldRespondToMessage,
@@ -14,8 +12,6 @@ function normalizePhone(value) {
   if (!value) return '';
   return String(value).split('@')[0].replace(/\D/g, '');
 }
-
-
 
 async function handleIncomingMessage(message, client) {
   try {
@@ -31,14 +27,11 @@ async function handleIncomingMessage(message, client) {
       fromMe: message?.fromMe,
     });
 
-    // Check if this is a private chat (not a group)
     const isPrivateChat = !(await isGroupMessage(message));
 
-    // For private chats: ALWAYS process, no filters required
     if (isPrivateChat) {
       logger.info('Private chat message - processing immediately without filters.');
     } else {
-      // For group chats: apply existing group filters
       if (!(await shouldProcessGroupMessage(message))) {
         return;
       }
@@ -65,39 +58,19 @@ async function handleIncomingMessage(message, client) {
       return;
     }
 
-    // Call the Python handle_incoming_message function
-    const pythonExecutable = process.env.PYTHON_EXECUTABLE || "python";
-    const pythonScript = path.join(__dirname, '..', 'whatsapp_handler.py');
-    const pythonProcess = spawn(pythonExecutable, [pythonScript, phone, text]);
+    const payload = {
+      phone,
+      message: text,
+      chat_type: isPrivateChat ? 'private' : 'group',
+      external_chat_id: message.from,
+      external_message_id: message.id?._serialized || message.id || null,
+    };
 
-    let reply = '';
-    let errorOutput = '';
+    const data = await postInboundMessage(payload);
+    const reply = typeof data?.reply === 'string' ? data.reply.trim() : '';
 
-    pythonProcess.stdout.on('data', (data) => {
-      reply += data.toString();
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-    });
-
-    await new Promise((resolve, reject) => {
-      pythonProcess.on('close', (code) => {
-        if (errorOutput) {
-          logger.error('Python subprocess stderr:', { data: errorOutput });
-        }
-        if (code !== 0) {
-          logger.error('Python subprocess failed.', { code });
-          reject(new Error(`Python subprocess failed with code ${code}`));
-        } else {
-          resolve();
-        }
-      });
-    });
-
-    // Send the reply back to WhatsApp
     if (reply) {
-      await message.reply(reply.trim());
+      await message.reply(reply);
       logger.info('Reply sent to WhatsApp.', {
         groupId: message.from,
         author: message.author || message.from,

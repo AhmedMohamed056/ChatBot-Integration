@@ -26,6 +26,7 @@ from typing import List, Optional
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -76,6 +77,12 @@ class Campaign(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     campaign_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    owner_supervisor_id: Mapped[int] = mapped_column(
+        ForeignKey("supervisors.id", ondelete="RESTRICT"), nullable=False
+    )
+    lock_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
 
     campaign_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
@@ -96,6 +103,15 @@ class Campaign(TimestampMixin, Base):
         cascade="all, delete-orphan",
         order_by="CampaignUpdate.created_at.desc()",
     )
+    versions: Mapped[List["CampaignVersion"]] = relationship(
+        "CampaignVersion",
+        back_populates="campaign",
+        cascade="all, delete-orphan",
+        order_by="CampaignVersion.version_number.desc()",
+    )
+    owner: Mapped["Supervisor"] = relationship(
+        "Supervisor", back_populates="owned_campaigns"
+    )
 
     __table_args__ = (
         UniqueConstraint("campaign_name", name="uq_campaigns_campaign_name"),
@@ -103,7 +119,11 @@ class Campaign(TimestampMixin, Base):
         Index("ix_campaigns_campaign_type", "campaign_type"),
         Index("ix_campaigns_start_date", "start_date"),
         Index("ix_campaigns_end_date", "end_date"),
+        Index("ix_campaigns_owner_supervisor_id", "owner_supervisor_id"),
+        CheckConstraint("lock_version >= 1", name="ck_campaigns_lock_version_positive"),
     )
+
+    __mapper_args__ = {"version_id_col": lock_version}
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
@@ -132,6 +152,9 @@ class CampaignUpdate(Base):
         Integer,
         ForeignKey("campaigns.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    campaign_version_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("campaign_versions.id", ondelete="RESTRICT"), nullable=True
     )
 
     update_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -164,6 +187,7 @@ class CampaignUpdate(Base):
         Index("ix_campaign_updates_update_type", "update_type"),
         Index("ix_campaign_updates_source", "source"),
         Index("ix_campaign_updates_created_at", "created_at"),
+        Index("ix_campaign_updates_campaign_version_id", "campaign_version_id"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -388,6 +412,9 @@ class CampaignVisitor(TimestampMixin, Base):
     __tablename__ = "campaign_visitors"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    campaign_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=True
+    )
 
     campaign_name: Mapped[str] = mapped_column(String(255), nullable=False)
 
@@ -400,6 +427,7 @@ class CampaignVisitor(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_campaign_visitors_phone_number", "phone_number"),
         Index("ix_campaign_visitors_campaign_name", "campaign_name"),
+        Index("ix_campaign_visitors_campaign_id", "campaign_id"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover

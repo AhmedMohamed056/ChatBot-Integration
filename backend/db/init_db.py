@@ -16,7 +16,8 @@ Usage
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Union
 
 from sqlalchemy import inspect, text
 
@@ -31,11 +32,12 @@ from db.models import (  # noqa: F401 – import so models register with Base
     VisitorQuestion,
     CampaignVisitor,
 )
+from db import platform_models as _platform_models  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
 #: Current schema version.  Increment when a migration is added.
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = "0001_phase1_foundation"
 
 _SCHEMA_VERSION_TABLE = "schema_version"
 
@@ -50,38 +52,32 @@ def _get_engine():
 
 
 def init_db() -> None:
-    """Create all tables if they don't already exist.
+    """Create all tables for tests and staged SQLite compatibility.
 
-    This is **idempotent** – calling it multiple times is safe.  It also
-    records the schema version for future migration logic.
+    Production deployments must call :func:`upgrade_database` so Alembic
+    owns schema evolution. This helper remains idempotent for legacy callers.
     """
     engine = _get_engine()
-    # Import all models so they are registered on Base.metadata
     Base.metadata.create_all(bind=engine)
+    logger.info("Database metadata created for compatibility/testing")
 
-    _ensure_schema_version_table()
-    version = get_schema_version()
-    if version is None:
-        set_schema_version(CURRENT_SCHEMA_VERSION)
-        logger.info("Database initialised at schema version %d", CURRENT_SCHEMA_VERSION)
-    elif version < CURRENT_SCHEMA_VERSION:
-        logger.info(
-            "Database at schema version %d, current is %d – running migrations",
-            version,
-            CURRENT_SCHEMA_VERSION,
-        )
-        _run_migrations(version)
-    else:
-        logger.debug("Database already at schema version %d", version)
+
+def upgrade_database(revision: str = "head") -> None:
+    """Upgrade the configured database using the repository Alembic config."""
+    from alembic import command
+    from alembic.config import Config
+
+    backend_dir = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_dir / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_dir / "alembic"))
+    config.set_main_option("sqlalchemy.url", str(_get_engine().url))
+    command.upgrade(config, revision)
 
 
 def drop_all() -> None:
     """Drop **all** tables.  Mainly for tests and full resets."""
     engine = _get_engine()
     Base.metadata.drop_all(bind=engine)
-    # Also drop the schema-version table if present
-    with engine.begin() as conn:
-        conn.execute(text(f"DROP TABLE IF EXISTS {_SCHEMA_VERSION_TABLE}"))
 
 
 # ---------------------------------------------------------------------------
@@ -105,10 +101,13 @@ def _ensure_schema_version_table() -> None:
         )
 
 
-def get_schema_version() -> Optional[int]:
-    """Return the current schema version, or ``None`` if not set."""
+def get_schema_version() -> Optional[Union[int, str]]:
+    """Return the Alembic revision (or a legacy integer), if present."""
     engine = _get_engine()
     inspector = inspect(engine)
+    if inspector.has_table("alembic_version"):
+        with engine.begin() as conn:
+            return conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
     if not inspector.has_table(_SCHEMA_VERSION_TABLE):
         return None
     with engine.begin() as conn:
@@ -120,7 +119,7 @@ def get_schema_version() -> Optional[int]:
 
 
 def set_schema_version(version: int) -> None:
-    """Record a schema version (insert or update the single row)."""
+    """Legacy compatibility helper; Alembic owns new schema versions."""
     engine = _get_engine()
     _ensure_schema_version_table()
     with engine.begin() as conn:

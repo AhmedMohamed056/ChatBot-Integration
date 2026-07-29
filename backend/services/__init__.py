@@ -1,1 +1,1 @@
-# Compatibility package for backend app entrypoints.
+"""Application services (domain orchestration above repositories)."""

@@ -128,12 +128,10 @@ def import_campaign_visitors() -> dict[str, Any]:
                     continue
 
                 # 6. Upsert (insert or update by phone number)
-                _, created = repo.upsert_by_phone(
-                    {
-                        "campaign_name": campaign_name,
-                        "visitor_name": visitor_name,
-                        "phone_number": phone_number,
-                    }
+                _, created = repo.upsert(
+                    campaign_name,
+                    visitor_name,
+                    phone_number,
                 )
                 if created:
                     imported += 1

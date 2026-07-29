@@ -328,7 +328,12 @@
     function DashboardView() {
       const [stats, setStats] = useState(null);
       useEffect(() => {
-        apiGet('/admin/stats').then(setStats).catch(() => setStats(PLACEHOLDER_STATS));
+        apiGet('/admin/stats').then(setStats).catch(() => setStats({
+          total_campaigns: 0,
+          total_messages: 0,
+          total_knowledge_files: 0,
+          total_visitor_questions: 0,
+        }));
       }, []);
 
       if (!stats) {
@@ -710,15 +715,15 @@
       useEffect(() => {
         apiGet('/admin/reports/campaign-activity')
           .then((d) => setCampaignReport(d.items || []))
-          .catch(() => setCampaignReport(PLACEHOLDER_CAMPAIGN_ACTIVITY));
+          .catch(() => setCampaignReport([]));
         apiGet('/admin/reports/visitor-questions')
           .then((d) => {
             setTopQuestions(d.top_questions || []);
             setUnanswered(d.unanswered || []);
           })
           .catch(() => {
-            setTopQuestions(PLACEHOLDER_TOP_QUESTIONS);
-            setUnanswered(PLACEHOLDER_UNANSWERED);
+            setTopQuestions([]);
+            setUnanswered([]);
           });
       }, []);
 

@@ -16,7 +16,6 @@ Usage
 
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,30 +24,55 @@ from typing import Generator
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from settings import get_settings
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
+_settings = get_settings()
 
-#: Database file path.  Override via the ``CAMPAIGN_DB_PATH`` environment
-#: variable so tests / deployments can redirect it.
-DB_PATH = Path(os.getenv("CAMPAIGN_DB_PATH", str(BACKEND_DIR / "campaigns.db")))
-
-#: SQLite connection URL.
-DATABASE_URL = f"sqlite:///{DB_PATH}"
+# Compatibility exports. New code should consume ``get_settings()``.
+DATABASE_URL = _settings.database_url
+DB_PATH = Path(DATABASE_URL.removeprefix("sqlite:///")) if DATABASE_URL.startswith(
+    "sqlite:///"
+) else None
 
 # ---------------------------------------------------------------------------
 # Engine & session factory
 # ---------------------------------------------------------------------------
 
-engine: Engine = create_engine(
-    DATABASE_URL,
-    echo=False,
-    future=True,
-    connect_args={"check_same_thread": False},
-)
+def _engine_options(url: str) -> dict:
+    options: dict = {
+        "echo": get_settings().database_echo,
+        "future": True,
+        "pool_pre_ping": get_settings().database_pool_pre_ping,
+    }
+    if url.startswith("sqlite"):
+        options["connect_args"] = {"check_same_thread": False}
+    else:
+        options["pool_size"] = get_settings().database_pool_size
+        options["max_overflow"] = get_settings().database_max_overflow
+    return options
+
+
+def create_database_engine(url: str) -> Engine:
+    """Create an engine with dialect-appropriate production defaults."""
+    new_engine = create_engine(url, **_engine_options(url))
+    if new_engine.dialect.name == "sqlite":
+        event.listen(new_engine, "connect", _set_sqlite_pragma)
+    return new_engine
+
+
+def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # noqa: ANN001, ARG001
+    """Enable SQLite foreign keys for parity with PostgreSQL."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
+engine: Engine = create_database_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(
     bind=engine,
@@ -57,19 +81,6 @@ SessionLocal = sessionmaker(
     expire_on_commit=False,
     class_=Session,
 )
-
-
-@event.listens_for(engine, "connect")
-def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # noqa: ANN001
-    """Enable foreign-key enforcement on every new SQLite connection.
-
-    SQLite does **not** enforce foreign keys by default; this PRAGMA must be
-    set per-connection.
-    """
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.close()
 
 
 # ---------------------------------------------------------------------------
@@ -116,33 +127,20 @@ def get_session() -> Generator[Session, None, None]:
 
 
 def init_engine(db_path: str | Path | None = None) -> Engine:
-    """Re-create the engine pointing at *db_path*.
+    """Rebind sessions to a URL or legacy SQLite path.
 
-    Primarily useful for tests that need an in-memory or temporary
-    database.  When *db_path* is ``None`` the default :data:`DB_PATH` is
-    used.
+    This compatibility helper is primarily intended for tests. Production
+    processes should configure ``DATABASE_URL`` before importing the app.
     """
     global engine, SessionLocal
 
     if db_path is None:
-        url = DATABASE_URL
+        url = get_settings().database_url
     else:
-        url = f"sqlite:///{db_path}"
+        value = str(db_path)
+        url = value if "://" in value else f"sqlite:///{value}"
 
-    engine = create_engine(
-        url,
-        echo=False,
-        future=True,
-        connect_args={"check_same_thread": False},
-    )
-
-    # Re-attach the PRAGMA hook
-    @event.listens_for(engine, "connect")
-    def _set_pragma(dbapi_connection, connection_record):  # noqa: ANN001, ARG001
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.close()
-
+    engine.dispose()
+    engine = create_database_engine(url)
     SessionLocal.configure(bind=engine)
     return engine

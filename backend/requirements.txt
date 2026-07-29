@@ -20,4 +20,7 @@ python-docx
 openpyxl
 hijri-converter
 sqlalchemy>=2.0
+alembic>=1.13
+psycopg2-binary>=2.9
+redis>=5.0
 google-generativeai

@@ -2,6 +2,8 @@
 
 A RAG (Retrieval-Augmented Generation) customer support system with a FastAPI backend and a WhatsApp bot integration. The backend exposes a chat API powered by Google Gemini and a Chroma vector store, plus an admin dashboard for managing documents, campaigns, and settings. The WhatsApp bot forwards group questions to the backend and replies with the AI's answers.
 
+> **Phase 0 contract status:** the production behavior is frozen in [`docs/contracts/`](docs/contracts/) and [`docs/architecture/target-platform.md`](docs/architecture/target-platform.md). The existing SQLite, configuration-based authorization, subprocess transport, and simple admin login are legacy implementation details and are **not** production authority. Later roadmap phases must implement the contracts; do not infer compliance from the current runtime.
+
 ---
 
 ## Table of Contents
@@ -76,7 +78,7 @@ Create `backend/.env`:
 # Google Gemini API key (required for the chat model)
 GOOGLE_API_KEY=your_google_gemini_api_key_here
 
-# Admin dashboard credentials (required to access /admin/dashboard)
+# Legacy development dashboard credentials (not production RBAC)
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your_secure_password
 ```
@@ -169,11 +171,13 @@ The API runs on **http://127.0.0.1:8000**.
 - Admin login: http://127.0.0.1:8000/admin/login
 - Health check: http://127.0.0.1:8000/health
 
-On startup the backend will:
+The current legacy backend will:
 
 1. Initialize the SQLite database (`backend/app.db`).
 2. Load and index any documents in `static_pdfs/` into the Chroma vector store (`backend/chroma_db/`).
 3. Build the RAG QA chain using Google Gemini (`gemini-2.5-flash`) and HuggingFace multilingual embeddings.
+
+The production target uses PostgreSQL as its only transactional source of truth, Redis for reconstructable queues/locks/cache, and Chroma as a reconstructable retrieval projection. Runtime supervisor authorization must come from active PostgreSQL-imported records—never configuration or Excel.
 
 ---
 
@@ -220,8 +224,15 @@ When you see the log line `WhatsApp client is ready.`, the bot is online.
 
 ## Using the Bot in WhatsApp
 
-1. Add the bot's WhatsApp account to a group chat.
-2. Mention the bot in a message with your question, or use the configured prefix.
+The production routing contract is:
+
+- Groups are knowledge-only and can never mutate a campaign, regardless of sender role.
+- Campaign management is private-chat only.
+- A private non-supervisor is knowledge-only.
+- A private supervisor is authorized only by an active PostgreSQL-imported record and can manage only the one-owner campaign assigned to that record.
+- Admin actions require authenticated RBAC; bypass is explicit and audited.
+
+In a group, mention the bot with an approved-knowledge question or use the configured prefix.
 
 **Example with mention:**
 
@@ -235,21 +246,13 @@ When you see the log line `WhatsApp client is ready.`, the bot is online.
 ! what is your return policy?
 ```
 
-The bot only replies in group chats (not DMs) and only when mentioned or when the prefix is used (unless `REQUIRE_MENTION=false`).
-
-### Teach the bot new knowledge
-
-Admins can add Q&A pairs directly from WhatsApp using the `!learn` command:
-
-```text
-!learn What are your opening hours? | We are open daily from 9 AM to 9 PM.
-```
-
-The separator can be `|` or `=>`. The new knowledge is added to the Chroma vector store and is immediately available to the RAG chain.
+Group replies use approved, audience-visible knowledge only. User messages, attachments, imported cells, and retrieved text are untrusted data and cannot override authorization, source priority, or tool policy.
 
 ### Campaign updates
 
-If a message comes from a phone number registered to an active campaign, the bot forwards it to the backend's `/campaign/update` endpoint to store the update.
+In private chat, the system collects a structured draft, asks only for missing contextual fields, presents a review summary, and requires the standalone token `OK`. No campaign mutation is written before that explicit confirmation. Draft/state memory persists across restarts; each commit creates immutable version and audit history. Approved campaign versions join RAG through a targeted campaign/version embedding refresh.
+
+Ordinary deletion tombstones the campaign and removes it from active retrieval while retaining immutable history. Regulated purge is a separate, privileged, audited RBAC workflow.
 
 ---
 
@@ -258,10 +261,10 @@ If a message comes from a phone number registered to an active campaign, the bot
 The backend includes a web admin dashboard for managing the knowledge base, campaigns, and settings.
 
 1. Go to **http://127.0.0.1:8000/admin/login**.
-2. Log in with the `ADMIN_USERNAME` and `ADMIN_PASSWORD` from `backend/.env`.
+2. For legacy local development, log in with `ADMIN_USERNAME` and `ADMIN_PASSWORD` from `backend/.env`. Production requires authenticated users, server-side sessions, and least-privilege RBAC.
 3. From the dashboard you can:
    - Upload, replace, and delete knowledge-base documents.
-   - Rebuild the vector store.
+   - Rebuild the legacy vector store (production changes use targeted refresh).
    - Create, update, and delete campaigns.
    - View dashboard stats and reports (visitor questions, campaign activity).
    - Edit the assistant name, system prompt, and upload calendar/campaign-list files.
@@ -309,6 +312,8 @@ The backend includes a web admin dashboard for managing the knowledge base, camp
 ```
 
 `source` can be `website` or `whatsapp`.
+
+All relative-date behavior uses the trusted system date/time and configured IANA business timezone (`Asia/Riyadh` initially). Authoritative source order, prompt-injection boundaries, deletion/purge behavior, and complete lifecycle semantics are defined in [`docs/contracts/`](docs/contracts/).
 
 ---
 
