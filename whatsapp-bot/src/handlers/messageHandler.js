@@ -30,7 +30,7 @@ async function handleIncomingMessage(message, client) {
     const isPrivateChat = !(await isGroupMessage(message));
 
     if (isPrivateChat) {
-      logger.info('Private chat message - processing immediately without filters.');
+      logger.info('Private chat message - authorization decided by backend supervisors table.');
     } else {
       if (!(await shouldProcessGroupMessage(message))) {
         return;
@@ -69,13 +69,21 @@ async function handleIncomingMessage(message, client) {
     const data = await postInboundMessage(payload);
     const reply = typeof data?.reply === 'string' ? data.reply.trim() : '';
 
-    if (reply) {
-      await message.reply(reply);
-      logger.info('Reply sent to WhatsApp.', {
-        groupId: message.from,
-        author: message.author || message.from,
-      });
+    // Empty reply = unauthorized ignore mode or no-op. Do not send anything.
+    if (!reply) {
+      if (isPrivateChat) {
+        logger.info('Private message ignored (empty backend reply / unauthorized).', {
+          phoneSuffix: phone.slice(-4),
+        });
+      }
+      return;
     }
+
+    await message.reply(reply);
+    logger.info('Reply sent to WhatsApp.', {
+      groupId: message.from,
+      author: message.author || message.from,
+    });
   } catch (error) {
     logger.error('Failed to process message.', {
       error: error.message,
@@ -84,10 +92,15 @@ async function handleIncomingMessage(message, client) {
       body: message?.body,
     });
 
+    // Never invent replies for private chats on transport failure —
+    // that would look like an unauthorized assistant answering.
     try {
-      await message.reply(
-        'Sorry, I could not reach the support service right now. Please try again in a moment.',
-      );
+      const isPrivate = !(await isGroupMessage(message));
+      if (!isPrivate) {
+        await message.reply(
+          'Sorry, I could not reach the support service right now. Please try again in a moment.',
+        );
+      }
     } catch (replyError) {
       logger.error('Failed to send error reply.', {
         error: replyError.message,

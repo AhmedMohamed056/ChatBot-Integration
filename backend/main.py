@@ -534,7 +534,14 @@ def rebuild_knowledge_base():
 
 
 def is_admin_authenticated(request: Request) -> bool:
-    return request.cookies.get(ADMIN_SESSION_COOKIE) == "authenticated"
+    from db.base import get_session
+    from services.admin_auth_service import resolve_session
+
+    token = request.cookies.get(ADMIN_SESSION_COOKIE)
+    if not token:
+        return False
+    with get_session() as session:
+        return resolve_session(session, token) is not None
 
 
 @app.middleware("http")
@@ -624,6 +631,7 @@ def render_admin_login_page() -> HTMLResponse:
     <div class="brand" style="margin-bottom: 12px;">Admin Access</div>
     <h1>تسجيل الدخول للإدارة</h1>
     <p>استخدم اسم المستخدم وكلمة المرور الخاصة بالإدارة للدخول إلى لوحة التحكم.</p>
+    <p id="login-error" style="color:#f0c685;display:none;margin-bottom:16px;"></p>
     <form method="post" action="/admin/login">
       <label>
         اسم المستخدم
@@ -635,6 +643,21 @@ def render_admin_login_page() -> HTMLResponse:
       </label>
       <button class="btn" type="submit">دخول</button>
     </form>
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        var err = params.get('error');
+        var el = document.getElementById('login-error');
+        if (!err || !el) return;
+        var messages = {
+          invalid_username: 'اسم المستخدم غير صحيح.',
+          invalid_password: 'كلمة المرور غير صحيحة.',
+          not_configured: 'لم يتم إعداد حساب الإدارة بعد.',
+        };
+        el.textContent = messages[err] || 'تعذر تسجيل الدخول.';
+        el.style.display = 'block';
+      })();
+    </script>
   </div>
 </body>
 </html>
@@ -665,19 +688,25 @@ async def admin_login_page(request: Request):
 
 @app.post("/admin/login")
 async def admin_login_submit(username: str = Form(...), password: str = Form(...)):
-    if not ADMIN_USERNAME or not ADMIN_PASSWORD:
-        raise HTTPException(status_code=503, detail="Admin credentials are not configured in the environment")
+    from db.base import get_session
+    from services.admin_auth_service import AdminAuthError, ensure_default_admin, login
 
-    if username != ADMIN_USERNAME or password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Invalid admin credentials")
+    with get_session() as session:
+        ensure_default_admin(session)
+        try:
+            token = login(session, username, password)
+        except AdminAuthError as exc:
+            return RedirectResponse(
+                url=f"/admin/login?error={exc.code}", status_code=303
+            )
 
     response = RedirectResponse(url="/admin/dashboard", status_code=303)
     response.set_cookie(
         key=ADMIN_SESSION_COOKIE,
-        value="authenticated",
+        value=token,
         httponly=True,
         samesite="lax",
-        max_age=3600,
+        max_age=3600 * 8,
         path="/",
     )
     return response
@@ -691,7 +720,13 @@ async def admin_dashboard(request: Request):
 
 
 @app.get("/admin/logout")
-async def admin_logout():
+async def admin_logout(request: Request):
+    from db.base import get_session
+    from services.admin_auth_service import logout
+
+    token = request.cookies.get(ADMIN_SESSION_COOKIE)
+    with get_session() as session:
+        logout(session, token)
     response = RedirectResponse(url="/admin/login", status_code=303)
     response.delete_cookie(key=ADMIN_SESSION_COOKIE, path="/")
     return response
@@ -723,6 +758,21 @@ async def startup_event():
 
     init_db()
     init_campaign_db()  # Initialize campaigns.db (SQLAlchemy layer)
+    from db.base import get_session
+    from services.admin_auth_service import ensure_default_admin
+
+    with get_session() as session:
+        ensure_default_admin(session)
+
+    from services.runtime_settings import load_all_runtime_settings
+
+    load_all_runtime_settings()
+
+    # Production policy: unknown private WhatsApp numbers are ignored by default.
+    # (Earlier builds seeded "message", which replied to every unknown number.)
+    from database import set_setting
+
+    set_setting("private_unauthorized_mode", "ignore")
 
     # Remove DB records for files that were deleted manually (not via the API)
     removed = cleanup_orphaned_file_records()
@@ -749,12 +799,9 @@ async def startup_event():
 
 
 def build_enriched_question(message: str) -> str:
-    campaign_context = build_active_campaign_context()
     datetime_context = format_datetime_context_block()
     return (
         f"{datetime_context}\n\n"
-        f"Active Campaign Information (not part of RAG, use only if relevant and not expired):\n"
-        f"{campaign_context}\n\n"
         f"Visitor Question:\n{message}"
     )
 
@@ -1016,14 +1063,21 @@ async def campaign_update(req: CampaignUpdateRequest):
 
 @app.get("/admin/stats")
 async def admin_stats():
-    return get_dashboard_stats()
+    from db.base import get_session
+    from services.platform_admin_service import get_dashboard_stats as platform_stats
+
+    legacy = get_dashboard_stats()
+    with get_session() as session:
+        return platform_stats(session, legacy)
 
 
 @app.get("/admin/campaigns")
 async def admin_list_campaigns():
-    # Read-only view: campaigns are managed automatically by the AI from
-    # WhatsApp messages. The admin UI must not create/edit/delete campaigns.
-    return {"campaigns": list_campaigns_with_stats()}
+    from db.base import get_session
+    from services.platform_admin_service import list_campaigns_with_stats
+
+    with get_session() as session:
+        return {"campaigns": list_campaigns_with_stats(session)}
 
 
 @app.get("/admin/campaigns/{campaign_id}/messages")
@@ -1034,8 +1088,21 @@ async def admin_get_campaign_messages(campaign_id: int):
     is managed automatically by the AI; only individual update messages may be
     deleted by the admin.
     """
-    messages = get_campaign_messages(campaign_id)
+    from db.base import get_session
+    from services.platform_admin_service import get_campaign_messages as pg_messages
+
+    with get_session() as session:
+        messages = pg_messages(session, campaign_id)
     return {"campaign_id": campaign_id, "messages": messages}
+
+
+@app.get("/admin/campaigns/{campaign_id}/versions")
+async def admin_campaign_versions(campaign_id: int):
+    from db.base import get_session
+    from services.platform_admin_service import list_campaign_versions
+
+    with get_session() as session:
+        return {"campaign_id": campaign_id, "versions": list_campaign_versions(session, campaign_id)}
 
 
 @app.delete("/admin/campaigns/messages/{message_id}")
@@ -1070,15 +1137,25 @@ async def admin_update_campaign(campaign_id: int, req: CampaignRequest):
 
 @app.delete("/admin/campaigns/{campaign_id}")
 async def admin_delete_campaign(campaign_id: int):
-    deleted = delete_campaign(campaign_id)
+    from db.base import get_session
+    from services.platform_admin_service import delete_campaign_transactional
+    from services.rag_campaign_indexer import remove_campaign_embeddings
+
+    with get_session() as session:
+        deleted = delete_campaign_transactional(session, campaign_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    remove_campaign_embeddings(campaign_id)
     return {"ok": True, "message": "Campaign deleted"}
 
 
 @app.get("/admin/reports/campaign-activity")
 async def admin_campaign_activity_report():
-    return {"items": get_campaign_activity_report()}
+    from db.base import get_session
+    from services.platform_admin_service import get_campaign_activity_report as pg_activity
+
+    with get_session() as session:
+        return {"items": pg_activity(session)}
 
 
 @app.get("/admin/reports/visitor-questions")
@@ -1126,14 +1203,18 @@ async def admin_get_settings():
 
 @app.put("/admin/settings")
 async def admin_update_settings(req: SettingsUpdateRequest):
+    from services.runtime_settings import apply_runtime_env, set_runtime_setting
+
     if req.bot_name is not None:
-        set_setting("bot_name", req.bot_name)
+        set_runtime_setting("bot_name", req.bot_name)
     if req.system_prompt is not None:
-        set_setting("system_prompt", req.system_prompt)
-    if req.gemini_api_key is not None:
-        set_setting("gemini_api_key", req.gemini_api_key)
+        set_runtime_setting("system_prompt", req.system_prompt)
+    if req.gemini_api_key is not None and req.gemini_api_key and "****" not in req.gemini_api_key:
+        set_runtime_setting("gemini_api_key", req.gemini_api_key)
     if req.gemini_model is not None:
-        set_setting("gemini_model", req.gemini_model)
+        set_runtime_setting("gemini_model", req.gemini_model)
+
+    apply_runtime_env()
 
     # Rebuild QA chain if system prompt changed (requires vectordb)
     if req.system_prompt is not None:
@@ -1186,10 +1267,21 @@ async def admin_upload_campaign_file(file: UploadFile = File(...)):
 
 @app.post("/admin/campaign/import")
 async def admin_import_campaign():
-    """Import all visitors from the uploaded Campaign List Excel file."""
+    """Import supervisors/ownership from the uploaded Campaign Excel file."""
     try:
-        result = await asyncio.to_thread(import_campaign_visitors)
-        return result
+        from services.supervisor_import_service import activate_supervisor_import
+
+        supervisor_result = await asyncio.to_thread(activate_supervisor_import)
+        visitor_result = None
+        try:
+            visitor_result = await asyncio.to_thread(import_campaign_visitors)
+        except ValueError:
+            visitor_result = {"skipped": True, "reason": "visitor columns not present"}
+        return {
+            "ok": True,
+            "supervisors": supervisor_result,
+            "visitors": visitor_result,
+        }
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
@@ -1441,8 +1533,15 @@ async def admin_prayer_by_name(name: str):
 
 
 @app.post("/admin/settings/change-password")
-async def admin_change_password(req: ChangePasswordRequest):
-    success = change_admin_password(req.old_password, req.new_password)
+async def admin_change_password(req: ChangePasswordRequest, request: Request):
+    from db.base import get_session
+    from services.admin_auth_service import change_password
+
+    token = request.cookies.get(ADMIN_SESSION_COOKIE)
+    with get_session() as session:
+        success = change_password(
+            session, token, req.old_password, req.new_password
+        )
     if not success:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     return {"ok": True, "message": "Password changed successfully"}
@@ -1526,6 +1625,15 @@ async def admin_log_visitor_question(req: VisitorQuestionLogRequest):
     return {"ok": True}
 
 
+@app.get("/admin/audit")
+async def admin_audit_log(limit: int = 100):
+    from db.base import get_session
+    from services.platform_admin_service import list_audit_events
+
+    with get_session() as session:
+        return {"events": list_audit_events(session, limit=min(limit, 500))}
+
+
 @app.get("/admin/questions")
 async def admin_list_visitor_questions():
     """Return the latest visitor questions (newest first).
@@ -1544,23 +1652,9 @@ async def admin_list_visitor_questions():
 from conversation_router import ConversationRouter
 
 @app.post("/message")
+@app.post("/chat/message")
 async def message(req: MessageRequest):
-    """
-    Entry point for WhatsApp messages.
-
-    Routes messages through ConversationRouter which forwards to VisitorFlow.
-
-    Flow:
-        HTTP POST /message
-            ↓
-        ConversationRouter
-            ↓
-        VisitorFlow
-            ↓
-        Gemini
-            ↓
-        HTTP Response
-    """
+    """WhatsApp inbound entry. Private chats are supervisor-gated first."""
     router = ConversationRouter()
     reply = router.route_message(
         phone=req.phone,

@@ -1,23 +1,50 @@
-"""Inbound WhatsApp /message orchestration."""
+"""Inbound WhatsApp /message orchestration.
+
+Private-chat authorization is the FIRST decision. Unknown numbers never
+enter conversation, memory, Gemini, RAG, intent, or campaign pipelines.
+"""
 
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from db.base import get_session
+from db.platform_models import Supervisor
 from db.repositories.platform_repository import IdempotencyRepository
 from services.campaign_lifecycle_service import CampaignLifecycleService
 from services.conversation_service import ConversationService
-from services.supervisor_authorization_service import get_active_supervisor
+from services.intent_router import CAMPAIGN_MUTATION_INTENTS, detect_intent
+from services.runtime_settings import get_runtime_setting
+from services.supervisor_authorization_service import authorize_private_sender
 
+logger = logging.getLogger(__name__)
 
 GROUP_CAMPAIGN_REFUSAL = (
     "إدارة الحملات متاحة في المحادثة الخاصة فقط. "
     "في المجموعات يمكنني الإجابة عن أسئلة المعرفة."
 )
+
+PRIVATE_NON_SUPERVISOR = (
+    "عذراً، أنت غير مسجل كمشرف حملة.\n"
+    "Sorry, you are not registered as a campaign supervisor."
+)
+
+
+def _private_unauthorized_reply() -> str:
+    """Return empty string (ignore) or the configured rejection text.
+
+    Never triggers AI, conversation, or persistence side effects.
+    """
+    mode = (
+        get_runtime_setting("private_unauthorized_mode", "ignore") or "ignore"
+    ).strip().lower()
+    if mode == "message":
+        return PRIVATE_NON_SUPERVISOR
+    return ""
 
 
 @dataclass
@@ -41,7 +68,38 @@ class MessageOrchestrator:
         return self._visitor_flow
 
     def handle(self, inbound: InboundMessage) -> str:
-        chat_type = (inbound.chat_type or "private").lower()
+        chat_type = (inbound.chat_type or "private").strip().lower()
+
+        # --- PRIVATE: authorization gate BEFORE any pipeline ---
+        if chat_type == "private":
+            supervisor = self._authorize_private_read_only(inbound.phone)
+            if supervisor is None:
+                logger.info(
+                    "Private WhatsApp rejected (not an active imported supervisor).",
+                    extra={"phone_suffix": (inbound.phone or "")[-4:]},
+                )
+                return _private_unauthorized_reply()
+            return self._handle_supervisor_private(inbound, supervisor)
+
+        # --- GROUP: knowledge only ---
+        return self._handle_group(inbound)
+
+    def _authorize_private_read_only(self, phone: str) -> Optional[Supervisor]:
+        """Look up supervisors table only. No conversation / memory / audit writes."""
+        with get_session() as session:
+            return authorize_private_sender(session, phone)
+
+    def _handle_group(self, inbound: InboundMessage) -> str:
+        intent = detect_intent(inbound.message).intent
+        if intent in CAMPAIGN_MUTATION_INTENTS:
+            return GROUP_CAMPAIGN_REFUSAL
+        return self._get_visitor_flow().handle_message(
+            phone=inbound.phone, message=inbound.message
+        ).reply
+
+    def _handle_supervisor_private(
+        self, inbound: InboundMessage, authorized: Supervisor
+    ) -> str:
         external_chat_id = inbound.external_chat_id or inbound.phone
         scope = "whatsapp:message"
         idem_key = inbound.external_message_id or hashlib.sha256(
@@ -49,6 +107,11 @@ class MessageOrchestrator:
         ).hexdigest()
 
         with get_session() as session:
+            # Re-bind supervisor in this session (previous session closed).
+            supervisor = authorize_private_sender(session, inbound.phone)
+            if supervisor is None or supervisor.id != authorized.id:
+                return _private_unauthorized_reply()
+
             idem_repo = IdempotencyRepository(session)
             now = datetime.now(timezone.utc)
             cached = idem_repo.get_valid(scope, idem_key, now)
@@ -60,38 +123,30 @@ class MessageOrchestrator:
                 channel="whatsapp",
                 external_chat_id=external_chat_id,
                 participant_phone=inbound.phone,
-                chat_type=chat_type,
+                chat_type="private",
+                campaign_id=None,
             )
-            if conversations.record_message(
-                conversation,
-                direction="inbound",
-                body=inbound.message,
-                external_message_id=inbound.external_message_id,
-                sender_phone=inbound.phone,
-            ) is None and inbound.external_message_id:
+            if (
+                conversations.record_message(
+                    conversation,
+                    direction="inbound",
+                    body=inbound.message,
+                    external_message_id=inbound.external_message_id,
+                    sender_phone=inbound.phone,
+                )
+                is None
+                and inbound.external_message_id
+            ):
                 if cached and cached.response_body:
                     return str(cached.response_body.get("reply", ""))
 
-            supervisor = get_active_supervisor(session, inbound.phone)
-            if chat_type == "group":
-                if supervisor:
-                    reply = GROUP_CAMPAIGN_REFUSAL
-                else:
-                    reply = self._get_visitor_flow().handle_message(
-                        phone=inbound.phone, message=inbound.message
-                    ).reply
-            elif supervisor:
-                lifecycle = CampaignLifecycleService(session)
-                reply = lifecycle.handle(
-                    supervisor=supervisor,
-                    conversation_id=conversation.id,
-                    message=inbound.message,
-                    original_message=inbound.message,
-                )
-            else:
-                reply = self._get_visitor_flow().handle_message(
-                    phone=inbound.phone, message=inbound.message
-                ).reply
+            lifecycle = CampaignLifecycleService(session)
+            reply = lifecycle.handle(
+                supervisor=supervisor,
+                conversation_id=conversation.id,
+                message=inbound.message,
+                original_message=inbound.message,
+            )
 
             conversations.record_message(
                 conversation,

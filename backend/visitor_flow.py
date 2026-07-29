@@ -72,7 +72,13 @@ class VisitorFlow:
         """Get or create the GeminiClient instance."""
         if self._gemini_client is None:
             try:
-                self._gemini_client = GeminiClient()
+                from database import get_setting
+                from services.runtime_settings import apply_runtime_env
+
+                apply_runtime_env()
+                api_key = get_setting("gemini_api_key") or None
+                model = get_setting("gemini_model") or None
+                self._gemini_client = GeminiClient(api_key=api_key, model_name=model)
             except Exception as exc:
                 logger.error(f"Failed to initialize GeminiClient: {exc}")
                 return None
@@ -105,6 +111,12 @@ class VisitorFlow:
             The result containing the reply and whether it was handled successfully.
         """
         try:
+            from services.calendar_answer_service import try_calendar_answer
+
+            calendar_reply = try_calendar_answer(message)
+            if calendar_reply:
+                return VisitorFlowResult(reply=calendar_reply, handled=True)
+
             # Step 1: Build AIContext
             logger.info("Building AIContext")
             ai_context = build_ai_context(message=message, phone=phone)

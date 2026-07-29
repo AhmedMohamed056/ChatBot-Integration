@@ -62,10 +62,12 @@ HIJRI_MONTHS = {
 
 def get_timezone() -> ZoneInfo:
     tz_name = get_setting("timezone", "Asia/Riyadh")
-    try:
-        return ZoneInfo(tz_name)
-    except Exception:
-        return ZoneInfo("Asia/Riyadh")
+    for candidate in (tz_name, "Asia/Riyadh", "UTC"):
+        try:
+            return ZoneInfo(candidate)
+        except Exception:
+            continue
+    return ZoneInfo("UTC")
 
 
 def gregorian_to_hijri(dt: datetime) -> tuple[int, int, int]:

@@ -95,6 +95,7 @@ def init_db() -> None:
             "gemini_model": "gemini-2.5-flash",
             "campaign_file": "",
             "calendar_file": "",
+            "private_unauthorized_mode": "ignore",
         }
         for key, value in defaults.items():
             conn.execute(

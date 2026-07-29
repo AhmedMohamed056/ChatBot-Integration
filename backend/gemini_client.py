@@ -73,7 +73,7 @@ class GeminiClient:
         Raises:
             GeminiAuthenticationError: If API key is not provided and not found in environment.
         """
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        self.api_key = (api_key or os.getenv("GOOGLE_API_KEY") or "").strip() or None
 
         if not self.api_key:
             logger.error("GOOGLE_API_KEY is not provided and not found in environment variables")

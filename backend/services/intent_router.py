@@ -20,6 +20,34 @@ class Intent(str, Enum):
     UNKNOWN = "unknown"
 
 
+CAMPAIGN_MUTATION_INTENTS = frozenset(
+    {
+        Intent.CREATE_CAMPAIGN,
+        Intent.UPDATE_CAMPAIGN,
+        Intent.DELETE_CAMPAIGN,
+        Intent.CAMPAIGN_INQUIRY,
+    }
+)
+
+_CONFIRM_TOKENS = frozenset(
+    {
+        "ok",
+        "okay",
+        "approve",
+        "approved",
+        "confirm",
+        "confirmed",
+        "yes",
+        "نعم",
+        "موافق",
+        "موافقة",
+        "تأكيد",
+        "تاكيد",
+        "تم",
+    }
+)
+
+
 _GREETING = re.compile(
     r"^(?:مرحب|السلام|أهلا|اهلا|hello|hi)\b", re.IGNORECASE | re.UNICODE
 )
@@ -53,9 +81,10 @@ def detect_intent(message: str, *, pending_confirmation: bool = False) -> Intent
         return IntentResult(Intent.UNKNOWN, 0.0)
 
     if pending_confirmation:
-        if text.upper() == "OK":
+        normalized = text.strip().lower()
+        if normalized in _CONFIRM_TOKENS or text.strip().upper() == "OK":
             return IntentResult(Intent.CONFIRM_OK, 1.0)
-        if text.lower() in {"cancel", "إلغاء", "الغاء", "no", "لا"}:
+        if normalized in {"cancel", "إلغاء", "الغاء", "no", "لا"}:
             return IntentResult(Intent.CANCEL, 0.9)
         return IntentResult(Intent.UPDATE_CAMPAIGN, 0.6)
 

@@ -265,6 +265,7 @@
       { id: 'knowledge', label: 'Knowledge Base' },
       { id: 'campaigns', label: 'Campaigns' },
       { id: 'reports', label: 'Reports' },
+      { id: 'audit', label: 'Audit Logs' },
       { id: 'settings', label: 'Settings' },
     ];
 
@@ -533,11 +534,13 @@
       return React.createElement('span', { className: `status-badge ${cls}` }, status || '—');
     }
 
-    function CampaignDetailsPanel({ campaign, onClose, onMessageDeleted }) {
+    function CampaignDetailsPanel({ campaign, onClose, onMessageDeleted, onCampaignDeleted }) {
       const [messages, setMessages] = useState(null);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [deletingId, setDeletingId] = useState(null);
+      const [deletingCampaign, setDeletingCampaign] = useState(false);
+      const [versions, setVersions] = useState([]);
 
       function loadMessages() {
         setLoading(true);
@@ -548,7 +551,26 @@
           .finally(() => setLoading(false));
       }
 
-      useEffect(() => { loadMessages(); }, [campaign.id]);
+      useEffect(() => {
+        loadMessages();
+        apiGet(`/admin/campaigns/${campaign.id}/versions`)
+          .then((data) => setVersions(data.versions || []))
+          .catch(() => setVersions([]));
+      }, [campaign.id]);
+
+      async function deleteCampaign() {
+        if (!window.confirm(`Delete campaign "${campaign.name}" and all related data? This cannot be undone.`)) return;
+        setDeletingCampaign(true);
+        try {
+          await apiSend(`/admin/campaigns/${campaign.id}`, 'DELETE');
+          if (onCampaignDeleted) onCampaignDeleted();
+          onClose();
+        } catch (err) {
+          setError(err.message || 'Campaign delete failed');
+        } finally {
+          setDeletingCampaign(false);
+        }
+      }
 
       async function deleteMessage(messageId) {
         if (!window.confirm('Delete this campaign update? This cannot be undone.')) return;
@@ -577,7 +599,22 @@
             React.createElement('button', { className: 'details-close', onClick: onClose, 'aria-label': 'Close' }, '×')
           ),
           React.createElement('div', { className: 'readonly-banner' },
-            'هذه الحملة تُدار تلقائيًا بواسطة الذكاء الاصطناعي من رسائل واتساب. لا يمكن إنشاء أو تعديل أو حذف الحملة يدويًا. يُسمح فقط بحذف التحديثات الفردية.'
+            'التحديثات تُسجل من واتساب. يمكن للإدارة حذف الحملة بالكامل (قاعدة البيانات + embeddings) أو حذف تحديث فردي.'
+          ),
+          React.createElement('div', { className: 'actions-row', style: { marginBottom: '16px' } },
+            React.createElement('button', {
+              className: 'btn secondary danger',
+              disabled: deletingCampaign,
+              onClick: deleteCampaign
+            }, deletingCampaign ? 'Deleting campaign...' : 'Delete entire campaign')
+          ),
+          versions.length > 0 && React.createElement('div', { style: { marginBottom: '16px' } },
+            React.createElement('div', { className: 'label' }, `Version history (${versions.length})`),
+            versions.slice(0, 5).map((v) =>
+              React.createElement('div', { className: 'muted', key: v.id },
+                `v${v.version_number} — ${formatUploadDate(v.created_at)}`
+              )
+            )
           ),
           error && React.createElement('div', { className: 'message' }, error),
           loading
@@ -678,7 +715,8 @@
         selected && React.createElement(CampaignDetailsPanel, {
           campaign: selected,
           onClose: () => setSelected(null),
-          onMessageDeleted: loadCampaigns
+          onMessageDeleted: loadCampaigns,
+          onCampaignDeleted: () => { loadCampaigns(); setSelected(null); }
         })
       );
     }
@@ -1121,6 +1159,43 @@
       );
     }
 
+    function AuditView() {
+      const [events, setEvents] = useState([]);
+      const [loading, setLoading] = useState(true);
+      useEffect(() => {
+        apiGet('/admin/audit?limit=100')
+          .then((data) => setEvents(data.events || []))
+          .catch(() => setEvents([]))
+          .finally(() => setLoading(false));
+      }, []);
+      return React.createElement('div', null,
+        React.createElement('h1', { className: 'page-title' }, 'Audit Logs'),
+        loading
+          ? React.createElement('div', { className: 'muted' }, 'Loading...')
+          : (events.length === 0
+              ? React.createElement('div', { className: 'muted' }, 'No audit events yet.')
+              : React.createElement('table', { className: 'table' },
+                  React.createElement('thead', null,
+                    React.createElement('tr', null,
+                      ['Action', 'Entity', 'Actor', 'When'].map((h) =>
+                        React.createElement('th', { key: h }, h)
+                      )
+                    )
+                  ),
+                  React.createElement('tbody', null,
+                    events.map((e) =>
+                      React.createElement('tr', { key: e.id },
+                        React.createElement('td', null, e.action),
+                        React.createElement('td', null, `${e.entity_type} #${e.entity_id || ''}`),
+                        React.createElement('td', null, e.actor_id || e.actor_type),
+                        React.createElement('td', null, formatUploadDate(e.occurred_at))
+                      )
+                    )
+                  )
+                ))
+      );
+    }
+
     function AdminApp() {
       const [activeView, setActiveView] = useState('dashboard');
 
@@ -1129,6 +1204,7 @@
         knowledge: KnowledgeBaseView,
         campaigns: CampaignsView,
         reports: ReportsView,
+        audit: AuditView,
         settings: SettingsView,
       };
       const ActiveView = views[activeView] || DashboardView;

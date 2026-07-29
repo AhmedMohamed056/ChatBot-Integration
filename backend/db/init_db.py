@@ -59,6 +59,9 @@ def init_db() -> None:
     """
     engine = _get_engine()
     Base.metadata.create_all(bind=engine)
+    from db.sqlite_compat import apply_sqlite_schema_patches
+
+    apply_sqlite_schema_patches()
     logger.info("Database metadata created for compatibility/testing")
 
 

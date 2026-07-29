@@ -45,13 +45,8 @@ def _legacy_is_supervisor(phone: str) -> bool:
 
 
 def is_supervisor(phone: str) -> bool:
-    try:
-        from db.base import get_session
-        from services.supervisor_authorization_service import is_active_supervisor
+    from db.base import get_session
+    from services.supervisor_authorization_service import is_active_supervisor
 
-        with get_session() as session:
-            if is_active_supervisor(session, phone):
-                return True
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("DB supervisor check failed, using legacy settings: %s", exc)
-    return _legacy_is_supervisor(phone)
+    with get_session() as session:
+        return is_active_supervisor(session, phone)

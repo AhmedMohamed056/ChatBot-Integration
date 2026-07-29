@@ -24,3 +24,4 @@ alembic>=1.13
 psycopg2-binary>=2.9
 redis>=5.0
 google-generativeai
+tzdata>=2024.1
