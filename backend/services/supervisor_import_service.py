@@ -16,8 +16,14 @@ from db.repositories.platform_repository import SupervisorRepository
 from phone_utils import normalize_phone
 from services.runtime_settings import get_runtime_setting
 
-REQUIRED_COLUMNS = {"campaign name", "supervisor name", "phone number"}
-OPTIONAL_COLUMNS = {"status", "imported date"}
+# Accept multiple column name variants for flexibility
+# Supports: "Full Name"/"Phone"/"Campaign Name" (task spec) and legacy names
+REQUIRED_COLUMNS = {
+    "campaign name", "campaign_name", "campaign",  # campaign name variants
+    "supervisor name", "supervisor_name", "full name", "full_name",  # supervisor name variants
+    "phone number", "phone_number", "phone",  # phone number variants
+}
+OPTIONAL_COLUMNS = {"status", "imported date", "imported_date"}
 
 
 def _headers(row) -> dict[str, int]:
@@ -28,14 +34,35 @@ def _headers(row) -> dict[str, int]:
         key = str(cell).strip().lower()
         if key:
             normalised[key] = idx
-    missing = REQUIRED_COLUMNS - set(normalised.keys())
-    if missing:
-        raise ValueError(f"Missing required columns: {', '.join(sorted(missing))}")
-    mapping = {col: normalised[col] for col in REQUIRED_COLUMNS}
+
+    # Check if we have at least one column for each required category
+    # Map each required column to its variants
+    column_categories = {
+        "campaign": {"campaign name", "campaign_name", "campaign"},
+        "supervisor": {"supervisor name", "supervisor_name", "full name", "full_name"},
+        "phone": {"phone number", "phone_number", "phone"},
+    }
+
+    found_columns = {}
+    for category, variants in column_categories.items():
+        for variant in variants:
+            if variant in normalised:
+                found_columns[category] = normalised[variant]
+                break
+        else:
+            # If no variant found for this category, check if any variant exists in normalised
+            category_variants_found = [v for v in variants if v in normalised]
+            if not category_variants_found:
+                # Find which variants are missing
+                missing_variants = [v for v in variants if v not in normalised]
+                raise ValueError(f"Missing required column. Expected one of: {', '.join(sorted(variants))}")
+
+    # Also check for optional columns
     for opt in OPTIONAL_COLUMNS:
         if opt in normalised:
-            mapping[opt] = normalised[opt]
-    return mapping
+            found_columns[opt] = normalised[opt]
+
+    return found_columns
 
 
 def preview_supervisor_import() -> dict[str, Any]:
@@ -52,9 +79,9 @@ def preview_supervisor_import() -> dict[str, Any]:
     seen_phones: dict[str, int] = {}
     for i, row in enumerate(rows[1:], start=2):
         try:
-            campaign_name = str(row[col["campaign name"]] or "").strip()
-            supervisor_name = str(row[col["supervisor name"]] or "").strip()
-            phone_raw = str(row[col["phone number"]] or "").strip()
+            campaign_name = str(row[col["campaign"]] or "").strip()
+            supervisor_name = str(row[col["supervisor"]] or "").strip()
+            phone_raw = str(row[col["phone"]] or "").strip()
             phone = normalize_phone(phone_raw)
             status = (
                 str(row[col["status"]]).strip().lower()

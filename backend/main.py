@@ -1653,8 +1653,28 @@ from conversation_router import ConversationRouter
 
 @app.post("/message")
 @app.post("/chat/message")
-async def message(req: MessageRequest):
+async def message(request: Request):
     """WhatsApp inbound entry. Private chats are supervisor-gated first."""
+    try:
+        body = await request.json()
+        # Validate required fields before Pydantic validation
+        if not isinstance(body, dict):
+            raise ValueError("Request body must be a JSON object")
+        if not body.get("phone") or not str(body.get("phone", "")).strip():
+            raise ValueError("phone is required and cannot be empty")
+        if not body.get("message") or not str(body.get("message", "")).strip():
+            raise ValueError("message is required and cannot be empty")
+
+        req = MessageRequest.model_validate(body)
+    except Exception as e:
+        # Log the actual request body for debugging
+        print(f"⚠️ 422 Validation Error on /message: {e}")
+        print(f"Request body: {body}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid request: {str(e)}. Required fields: phone, message"
+        )
+
     router = ConversationRouter()
     reply = router.route_message(
         phone=req.phone,
