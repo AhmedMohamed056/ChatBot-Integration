@@ -19,6 +19,7 @@ from services.supervisor_context_service import (
     get_owned_campaign,
     seed_draft_from_campaign,
 )
+from visitor_flow import VisitorFlow
 
 
 REQUIRED_FIELDS = ("description",)
@@ -85,18 +86,6 @@ class CampaignLifecycleService:
                 supervisor, state, draft, original_message, operation=operation
             )
 
-        if intent_result.intent == Intent.GREETING and state.state_name == "IDLE":
-            if owned and not draft:
-                draft = seed_draft_from_campaign(owned)
-                data["draft"] = draft
-                data["operation"] = "update"
-                self.conversations.set_state(
-                    state, state_name="IDLE", state_data=data
-                )
-            return build_supervisor_greeting(
-                self.session, supervisor, conversation_id
-            )
-
         if intent_result.intent == Intent.DELETE_CAMPAIGN:
             operation = "delete"
             data["operation"] = operation
@@ -152,7 +141,10 @@ class CampaignLifecycleService:
                 "لأسئلة المعرفة استخدم المجموعة، أو اطلب تحديث الحملة هنا."
             )
 
-        return build_supervisor_greeting(self.session, supervisor, conversation_id)
+        # Fallback for general questions - call AI
+        visitor_flow = VisitorFlow()
+        result = visitor_flow.handle_message(phone=supervisor.phone_number, message=message)
+        return result.reply if result.handled else ""
 
     def _merge_extraction(
         self, draft: dict[str, Any], message: str, operation: str

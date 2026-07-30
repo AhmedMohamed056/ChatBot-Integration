@@ -140,6 +140,20 @@ class MessageOrchestrator:
                 if cached and cached.response_body:
                     return str(cached.response_body.get("reply", ""))
 
+            # Check and send greeting if not already sent
+            state = conversations.get_state(conversation.id)
+            state_data = dict(state.state_data or {})
+            greeting_text = ""
+            if not state_data.get("greeting_sent"):
+                from services.supervisor_context_service import build_supervisor_greeting
+                greeting_text = build_supervisor_greeting(
+                    session, supervisor, conversation.id
+                )
+                state_data["greeting_sent"] = True
+                conversations.set_state(
+                    state, state_name=state.state_name, state_data=state_data
+                )
+
             lifecycle = CampaignLifecycleService(session)
             reply = lifecycle.handle(
                 supervisor=supervisor,
@@ -148,10 +162,13 @@ class MessageOrchestrator:
                 original_message=inbound.message,
             )
 
+            # Prepend greeting to the first response only
+            final_reply = greeting_text + reply if greeting_text else reply
+
             conversations.record_message(
                 conversation,
                 direction="outbound",
-                body=reply,
+                body=final_reply,
                 sender_phone=None,
             )
             idem_repo.create(
@@ -161,8 +178,8 @@ class MessageOrchestrator:
                     "request_hash": hashlib.sha256(
                         inbound.message.encode("utf-8")
                     ).hexdigest(),
-                    "response_body": {"reply": reply},
+                    "response_body": {"reply": final_reply},
                     "expires_at": now + timedelta(days=1),
                 }
             )
-            return reply
+            return final_reply
