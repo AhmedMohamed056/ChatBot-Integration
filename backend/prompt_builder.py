@@ -85,6 +85,7 @@ def _coerce_context(context: Any) -> AIContext:
             return AIContext(
                 visitor=context.get("visitor"),
                 campaign=context.get("campaign"),
+                supervisor=context.get("supervisor"),
                 calendar=context.get("calendar") or [],
                 today_prayers=context.get("today_prayers") or [],
                 next_prayer=context.get("next_prayer"),
@@ -177,6 +178,46 @@ def _visitor_section(ctx: AIContext) -> list[str]:
         lines.append(f"Campaign: {campaign}")
     return lines
 
+def _supervisor_section(ctx: AIContext) -> list[str]:
+    """Build the SUPERVISOR section for authorized WhatsApp supervisors."""
+    supervisor = ctx.supervisor
+    if not isinstance(supervisor, dict):
+        return []
+
+    # Extract supervisor fields
+    name = _as_str(supervisor.get("supervisor_name"))
+    phone = _as_str(supervisor.get("phone"))
+    campaign_id = _as_str(supervisor.get("campaign_id"))
+    campaign_name = _as_str(supervisor.get("campaign_name"))
+    campaign_status = _as_str(supervisor.get("campaign_status"))
+    version = supervisor.get("current_campaign_version")
+    conversation_state = _as_str(supervisor.get("conversation_state"))
+    pending_draft = supervisor.get("pending_draft")
+
+    # Only include section if we have meaningful supervisor info
+    if not name and not phone:
+        return []
+
+    lines = ["SUPERVISOR"]
+    if name:
+        lines.append(f"Supervisor Name: {name}")
+    if phone:
+        lines.append(f"Phone: {phone}")
+    if campaign_id:
+        lines.append(f"Campaign ID: {campaign_id}")
+    if campaign_name:
+        lines.append(f"Campaign Name: {campaign_name}")
+    if campaign_status:
+        lines.append(f"Campaign Status: {campaign_status}")
+    if version is not None:
+        lines.append(f"Current Campaign Version: {version}")
+    if conversation_state:
+        lines.append(f"Conversation State: {conversation_state}")
+    if pending_draft:
+        lines.append(f"Pending Draft: {pending_draft}")
+
+    return lines
+
 
 def _calendar_section(ctx: AIContext) -> list[str]:
     events = ctx.calendar
@@ -260,6 +301,11 @@ def build_prompt(system_prompt: str, context: Union[AIContext, dict, None]) -> s
     lang_lines = _language_section(ctx)
     if lang_lines:
         sections.append(lang_lines)
+
+    # Supervisor section takes priority over visitor for supervisors
+    supervisor_lines = _supervisor_section(ctx)
+    if supervisor_lines:
+        sections.append(supervisor_lines)
 
     visitor_lines = _visitor_section(ctx)
     if visitor_lines:

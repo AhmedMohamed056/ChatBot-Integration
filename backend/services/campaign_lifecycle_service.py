@@ -15,6 +15,7 @@ from db.repositories.platform_repository import OutboxRepository
 from services.conversation_service import ConversationService
 from services.intent_router import Intent, detect_intent
 from services.supervisor_context_service import (
+    build_supervisor_context,
     build_supervisor_greeting,
     get_owned_campaign,
     seed_draft_from_campaign,
@@ -141,9 +142,19 @@ class CampaignLifecycleService:
                 "لأسئلة المعرفة استخدم المجموعة، أو اطلب تحديث الحملة هنا."
             )
 
-        # Fallback for general questions - call AI
+        # Fallback for general questions - call AI with supervisor context
+        # Build supervisor context for injection into AI requests
+        supervisor_context = build_supervisor_context(
+            self.session, supervisor, conversation_id
+        )
+
+        # Create a custom VisitorFlow that injects supervisor context
         visitor_flow = VisitorFlow()
-        result = visitor_flow.handle_message(phone=supervisor.phone_number, message=message)
+        result = visitor_flow.handle_message_with_supervisor(
+            phone=supervisor.phone_number,
+            message=message,
+            supervisor_context=supervisor_context
+        )
         return result.reply if result.handled else ""
 
     def _merge_extraction(

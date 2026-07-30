@@ -41,6 +41,7 @@ from prayer_time_engine import (
     get_today_prayers as get_today_prayers_engine,
 )
 from relative_date_service import resolve_relative_date
+from services.supervisor_context_service import SupervisorContext
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +64,10 @@ class AIContext:
         ``phone_number``) or ``None`` when the sender is unknown.
     campaign:
         The active campaign row for the sender's phone, or ``None``.
+    supervisor:
+        The supervisor context for authorized WhatsApp supervisors, or ``None``.
+        Contains supervisor_name, phone, campaign_id, campaign_name, campaign_status,
+        current_campaign_version, conversation_state, and pending_draft.
     calendar:
         Calendar events relevant to the message (resolved date / day),
         or ``[]`` when nothing matches.
@@ -83,6 +88,7 @@ class AIContext:
 
     visitor: Optional[dict[str, Any]] = None
     campaign: Optional[dict[str, Any]] = None
+    supervisor: Optional[dict[str, Any]] = None
     calendar: list[dict[str, Any]] = field(default_factory=list)
     today_prayers: list[dict[str, Any]] = field(default_factory=list)
     next_prayer: Optional[dict[str, Any]] = None
@@ -166,6 +172,7 @@ def build_context(
     message: str,
     phone: Optional[str] = None,
     provider: Optional[CurrentDateProvider] = None,
+    supervisor: Optional[SupervisorContext] = None,
 ) -> AIContext:
     """Build an :class:`AIContext` for an incoming WhatsApp message.
 
@@ -179,6 +186,9 @@ def build_context(
     provider:
         Optional :class:`CurrentDateProvider` for deterministic dates
         (mainly useful in tests).  Defaults to the wall-clock provider.
+    supervisor:
+        Optional :class:`SupervisorContext` for authorized WhatsApp supervisors.
+        When provided, the supervisor section is populated; when omitted it is ``None``.
 
     Returns
     -------
@@ -194,6 +204,11 @@ def build_context(
     if phone:
         visitor = _safe_call(detect_visitor, phone)
         campaign = _safe_call(get_campaign_by_phone, phone)
+
+    # --- Supervisor context (for authorized supervisors) -------------------
+    supervisor_dict: Optional[dict[str, Any]] = None
+    if supervisor is not None:
+        supervisor_dict = _safe_call(lambda: supervisor.to_dict())
 
     # --- Calendar (relative-date aware) ------------------------------------
     calendar_events = _resolve_calendar_events(raw_message, date_provider)
@@ -216,6 +231,7 @@ def build_context(
     return AIContext(
         visitor=visitor,
         campaign=campaign,
+        supervisor=supervisor_dict,
         calendar=calendar_events,
         today_prayers=today_prayers,
         next_prayer=next_prayer,

@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from ai_context_builder import build_context as build_ai_context
 from gemini_client import GeminiClient, GeminiClientError
 from prompts import build_visitor_system_prompt
 from prompt_builder import build_prompt
+from services.supervisor_context_service import SupervisorContext
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -161,6 +162,98 @@ class VisitorFlow:
             )
         except Exception as exc:
             logger.error(f"Unexpected error in VisitorFlow: {exc}")
+            return VisitorFlowResult(
+                reply="أعتذر، حدث خطأ أثناء معالجة الطلب.",
+                handled=False
+            )
+
+    def handle_message_with_supervisor(
+        self,
+        phone: str,
+        message: str,
+        supervisor_context: SupervisorContext
+    ) -> VisitorFlowResult:
+        """Handle an incoming message from an authorized supervisor with context injection.
+
+        This method is specifically for authorized WhatsApp supervisors and injects
+        their supervisor context into every Gemini request.
+
+        Orchestrates the complete flow:
+        1. Build AIContext using AIContextBuilder with supervisor context
+        2. Load Visitor System Prompt
+        3. Build Dynamic Prompt using PromptBuilder
+        4. Call GeminiClient
+        5. Return VisitorFlowResult
+
+        Parameters
+        ----------
+        phone : str
+            The supervisor's phone number.
+        message : str
+            The incoming message text.
+        supervisor_context : SupervisorContext
+            The supervisor context object containing name, phone, campaign info, etc.
+
+        Returns
+        -------
+        VisitorFlowResult
+            The result containing the reply and whether it was handled successfully.
+        """
+        try:
+            from services.calendar_answer_service import try_calendar_answer
+
+            calendar_reply = try_calendar_answer(message)
+            if calendar_reply:
+                return VisitorFlowResult(reply=calendar_reply, handled=True)
+
+            # Step 1: Build AIContext with supervisor context
+            logger.info("Building AIContext with supervisor context")
+            ai_context = build_ai_context(
+                message=message,
+                phone=phone,
+                supervisor=supervisor_context
+            )
+
+            # Step 2: Load Visitor System Prompt
+            logger.info("Loading Visitor System Prompt")
+            system_prompt = build_visitor_system_prompt()
+
+            # Step 3: Build Dynamic Prompt (includes system_prompt + context + user message)
+            logger.info("Building Prompt with supervisor context")
+            full_prompt = build_prompt(system_prompt=system_prompt, context=ai_context)
+
+            # Step 4: Call GeminiClient
+            # Note: build_prompt already includes the system prompt, so we pass empty system_prompt
+            # to avoid duplication. The full_prompt contains everything needed.
+            logger.info("Calling Gemini with supervisor context")
+            gemini_client = self._get_gemini_client()
+            if gemini_client is None:
+                logger.error("GeminiClient is not available")
+                return VisitorFlowResult(
+                    reply="أعتذر، حدث خطأ أثناء معالجة الطلب.",
+                    handled=False
+                )
+
+            response = gemini_client.generate(
+                system_prompt="",
+                user_prompt=full_prompt
+            )
+
+            # Step 5: Return Reply
+            logger.info("Reply generated successfully with supervisor context")
+            return VisitorFlowResult(
+                reply=response,
+                handled=True
+            )
+
+        except GeminiClientError as exc:
+            logger.error(f"GeminiClient error with supervisor context: {exc}")
+            return VisitorFlowResult(
+                reply="أعتذر، حدث خطأ أثناء معالجة الطلب.",
+                handled=False
+            )
+        except Exception as exc:
+            logger.error(f"Unexpected error in VisitorFlow with supervisor context: {exc}")
             return VisitorFlowResult(
                 reply="أعتذر، حدث خطأ أثناء معالجة الطلب.",
                 handled=False
