@@ -81,7 +81,7 @@ def test_build_context_with_supervisor():
     print("✓ build_context accepts supervisor parameter")
 
 def test_prompt_builder_supervisor_section():
-    """Test that prompt builder includes supervisor section."""
+    """Test that prompt builder includes supervisor section with identity message."""
     print("Testing prompt builder supervisor section...")
 
     from ai_context_builder import AIContext
@@ -105,10 +105,12 @@ def test_prompt_builder_supervisor_section():
 
     # Check that supervisor section is in the prompt
     assert "SUPERVISOR" in prompt, "Prompt missing SUPERVISOR section"
+    assert "You are speaking with an authorized campaign supervisor." in prompt, "Prompt missing supervisor identity message"
     assert "Supervisor Name: Ahmed" in prompt, "Prompt missing supervisor name"
+    assert "Phone: +201234567890" in prompt, "Prompt missing supervisor phone"
     assert "Campaign Name: Test Campaign" in prompt, "Prompt missing campaign name"
 
-    print("✓ Prompt builder includes supervisor section")
+    print("✓ Prompt builder includes supervisor section with identity message")
 
 def test_visitor_flow_with_supervisor():
     """Test that VisitorFlow can handle supervisor context."""

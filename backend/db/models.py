@@ -9,7 +9,7 @@ Tables
 - ``visitor_questions``  – every visitor question asked to the chatbot
 
 Design notes
-------------
+-----------
 - **No separate prayer-times table.**  Prayer times are columns on
   ``calendar_days`` because they belong to each day.
 - **Append-only history.**  ``campaign_updates`` never overwrites; every
@@ -44,7 +44,6 @@ from db.base import Base, utc_now
 # Mixins
 # ---------------------------------------------------------------------------
 
-
 class TimestampMixin:
     """Provides ``created_at`` / ``updated_at`` columns."""
 
@@ -58,11 +57,9 @@ class TimestampMixin:
         nullable=False,
     )
 
-
 # ---------------------------------------------------------------------------
 # Campaign
 # ---------------------------------------------------------------------------
-
 
 class Campaign(TimestampMixin, Base):
     """A single campaign record.
@@ -80,6 +77,7 @@ class Campaign(TimestampMixin, Base):
     owner_supervisor_id: Mapped[int] = mapped_column(
         ForeignKey("supervisors.id", ondelete="RESTRICT"), nullable=False
     )
+
     lock_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
@@ -112,6 +110,11 @@ class Campaign(TimestampMixin, Base):
     owner: Mapped["Supervisor"] = relationship(
         "Supervisor", back_populates="owned_campaigns"
     )
+    knowledge_entries: Mapped[List["CampaignKnowledge"]] = relationship(
+        "CampaignKnowledge",
+        back_populates="campaign",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         UniqueConstraint("campaign_name", name="uq_campaigns_campaign_name"),
@@ -131,11 +134,79 @@ class Campaign(TimestampMixin, Base):
             f"status={self.status!r})>"
         )
 
+# ---------------------------------------------------------------------------
+# Campaign Knowledge (supervisor-taught facts)
+# ---------------------------------------------------------------------------
+
+class CampaignKnowledge(TimestampMixin, Base):
+    """Stable campaign facts taught by supervisors.
+
+    Stores facts that supervisors teach the assistant about their campaigns.
+    These facts are automatically included in future conversations for the campaign.
+
+    Examples:
+    - "Our buses leave at 6 AM"
+    - "Meeting point is Gate 4"
+    - "VIP buses use Gate B"
+
+    Each knowledge entry is:
+    - Associated with a specific campaign
+    - Tagged with a category for organization
+    - Marked as active/inactive
+    - Versioned for audit purposes
+    """
+
+    __tablename__ = "campaign_knowledge"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    campaign_id: Mapped[int] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
+    )
+
+    fact_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # The stable fact text as taught by the supervisor
+
+    category: Mapped[str] = mapped_column(String(100), nullable=False, default="general")
+    # Category for organizing knowledge (e.g., "logistics", "timing", "location")
+
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False, default="supervisor")
+    # How this knowledge was acquired: "supervisor", "import", "auto_extracted"
+
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Whether this knowledge should be used in prompts
+
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Version number for tracking updates
+
+    created_by_supervisor_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("supervisors.id", ondelete="SET NULL")
+    )
+    # Which supervisor created this entry
+
+    # Relationships ---------------------------------------------------------
+    campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="knowledge_entries")
+    created_by: Mapped[Optional["Supervisor"]] = relationship(
+        "Supervisor", foreign_keys=[created_by_supervisor_id]
+    )
+
+    __table_args__ = (
+        Index("ix_campaign_knowledge_campaign_id", "campaign_id"),
+        Index("ix_campaign_knowledge_category", "category"),
+        Index("ix_campaign_knowledge_active", "is_active"),
+        Index("ix_campaign_knowledge_campaign_active", "campaign_id", "is_active"),
+        CheckConstraint("version >= 1", name="ck_campaign_knowledge_version_positive"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<CampaignKnowledge(id={self.id}, campaign_id={self.campaign_id}, "
+            f"category={self.category!r}, is_active={self.is_active})>"
+        )
 
 # ---------------------------------------------------------------------------
 # Campaign Update (append-only audit log)
 # ---------------------------------------------------------------------------
-
 
 class CampaignUpdate(Base):
     """Append-only record of every WhatsApp modification to a campaign.
@@ -196,11 +267,9 @@ class CampaignUpdate(Base):
             f"update_type={self.update_type!r})>"
         )
 
-
 # ---------------------------------------------------------------------------
 # Calendar Day
 # ---------------------------------------------------------------------------
-
 
 class CalendarDay(Base):
     """One row per calendar day.
@@ -251,11 +320,9 @@ class CalendarDay(Base):
     def __repr__(self) -> str:  # pragma: no cover
         return f"<CalendarDay(id={self.id}, gregorian_date={self.gregorian_date})>"
 
-
 # ---------------------------------------------------------------------------
 # Uploaded File
 # ---------------------------------------------------------------------------
-
 
 class UploadedFile(Base):
     """Track imported files (campaign Excel, calendar file, etc.)."""
@@ -291,11 +358,9 @@ class UploadedFile(Base):
     def __repr__(self) -> str:  # pragma: no cover
         return f"<UploadedFile(id={self.id}, filename={self.filename!r})>"
 
-
 # ---------------------------------------------------------------------------
 # Visitor Question
 # ---------------------------------------------------------------------------
-
 
 class VisitorQuestion(Base):
     """Store every visitor question asked to the chatbot.
@@ -351,11 +416,9 @@ class VisitorQuestion(Base):
             f"<VisitorQuestion(id={self.id}, detected_language={self.detected_language!r})>"
         )
 
-
 # ---------------------------------------------------------------------------
 # Calendar Event (imported from the Calendar Excel file)
 # ---------------------------------------------------------------------------
-
 
 class CalendarEvent(TimestampMixin, Base):
     """A single event row imported from the uploaded Calendar Excel file.
@@ -395,11 +458,9 @@ class CalendarEvent(TimestampMixin, Base):
             f"event_title={self.event_title!r})>"
         )
 
-
 # ---------------------------------------------------------------------------
 # Campaign Visitor (imported from Excel)
 # ---------------------------------------------------------------------------
-
 
 class CampaignVisitor(TimestampMixin, Base):
     """A visitor imported from the Campaign List Excel file.

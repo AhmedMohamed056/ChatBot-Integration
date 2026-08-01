@@ -98,8 +98,10 @@ def seed_draft_from_campaign(campaign: Campaign) -> dict[str, Any]:
     return {
         "campaign_name": campaign.campaign_name,
         "description": campaign.description or "",
+        "campaign_type": campaign.campaign_type or "",
         "start_date": str(campaign.start_date) if campaign.start_date else "",
         "end_date": str(campaign.end_date) if campaign.end_date else "",
+        "status": campaign.status,
         "location": campaign.notes or "",
         "operation": "update",
     }

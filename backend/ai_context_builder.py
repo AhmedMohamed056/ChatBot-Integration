@@ -42,6 +42,8 @@ from prayer_time_engine import (
 )
 from relative_date_service import resolve_relative_date
 from services.supervisor_context_service import SupervisorContext
+from services.conversation_memory_service import ConversationMemoryService, ConversationMemoryData
+from services.campaign_knowledge_service import CampaignKnowledgeService
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +70,9 @@ class AIContext:
         The supervisor context for authorized WhatsApp supervisors, or ``None``.
         Contains supervisor_name, phone, campaign_id, campaign_name, campaign_status,
         current_campaign_version, conversation_state, and pending_draft.
+    campaign_knowledge:
+        Campaign knowledge (supervisor-taught facts) for the campaign, or ``None``.
+        Contains a list of stable facts that should be used with highest priority.
     calendar:
         Calendar events relevant to the message (resolved date / day),
         or ``[]`` when nothing matches.
@@ -84,11 +89,15 @@ class AIContext:
         effort.  Never ``None`` (defaults to ``"ar"``).
     raw_message:
         The original incoming message, verbatim.
+    conversation_memory:
+        Conversation memory containing current topic, pending draft, summary,
+        last edited field, and recent messages. Or ``None`` when not available.
     """
 
     visitor: Optional[dict[str, Any]] = None
     campaign: Optional[dict[str, Any]] = None
     supervisor: Optional[dict[str, Any]] = None
+    campaign_knowledge: Optional[list[str]] = None
     calendar: list[dict[str, Any]] = field(default_factory=list)
     today_prayers: list[dict[str, Any]] = field(default_factory=list)
     next_prayer: Optional[dict[str, Any]] = None
@@ -96,6 +105,7 @@ class AIContext:
     current_day: Optional[str] = None
     language: str = "ar"
     raw_message: str = ""
+    conversation_memory: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a plain dict (stable, JSON-friendly contract)."""
@@ -173,6 +183,7 @@ def build_context(
     phone: Optional[str] = None,
     provider: Optional[CurrentDateProvider] = None,
     supervisor: Optional[SupervisorContext] = None,
+    conversation_id: Optional[int] = None,
 ) -> AIContext:
     """Build an :class:`AIContext` for an incoming WhatsApp message.
 
@@ -189,6 +200,9 @@ def build_context(
     supervisor:
         Optional :class:`SupervisorContext` for authorized WhatsApp supervisors.
         When provided, the supervisor section is populated; when omitted it is ``None``.
+    conversation_id:
+        Optional conversation ID. When provided, conversation memory is loaded
+        and included in the context.
 
     Returns
     -------
@@ -201,9 +215,18 @@ def build_context(
     # --- Visitor + Campaign (only when a phone is available) ---------------
     visitor: Optional[dict[str, Any]] = None
     campaign: Optional[dict[str, Any]] = None
+    campaign_knowledge: Optional[list[str]] = None
     if phone:
         visitor = _safe_call(detect_visitor, phone)
         campaign = _safe_call(get_campaign_by_phone, phone)
+        # Load campaign knowledge for this campaign
+        if campaign:
+            campaign_knowledge = _load_campaign_knowledge(campaign.get("id"))
+    elif supervisor is not None:
+        # For supervisors, load knowledge for their campaign
+        campaign_id = getattr(supervisor, 'campaign_id', None)
+        if campaign_id:
+            campaign_knowledge = _load_campaign_knowledge(campaign_id)
 
     # --- Supervisor context (for authorized supervisors) -------------------
     supervisor_dict: Optional[dict[str, Any]] = None
@@ -228,10 +251,16 @@ def build_context(
     # --- Language ----------------------------------------------------------
     language = _detect_language(raw_message)
 
+    # --- Conversation Memory ------------------------------------------------
+    conversation_memory: Optional[dict[str, Any]] = None
+    if conversation_id:
+        conversation_memory = _load_conversation_memory(conversation_id)
+
     return AIContext(
         visitor=visitor,
         campaign=campaign,
         supervisor=supervisor_dict,
+        campaign_knowledge=campaign_knowledge,
         calendar=calendar_events,
         today_prayers=today_prayers,
         next_prayer=next_prayer,
@@ -239,4 +268,31 @@ def build_context(
         current_day=current_day,
         language=language,
         raw_message=raw_message,
+        conversation_memory=conversation_memory,
     )
+
+def _load_conversation_memory(conversation_id: int) -> Optional[dict[str, Any]]:
+    """Load conversation memory for a given conversation ID."""
+    try:
+        from db.base import get_session
+        from services.conversation_memory_service import ConversationMemoryService
+
+        with get_session() as session:
+            memory_service = ConversationMemoryService(session)
+            return memory_service.get_memory_for_prompt(conversation_id)
+    except Exception as exc:
+        print(f"ai_context_builder: Failed to load conversation memory: {exc}")
+        return None
+
+def _load_campaign_knowledge(campaign_id: int) -> Optional[list[str]]:
+    """Load campaign knowledge for a given campaign ID."""
+    try:
+        from db.base import get_session
+        from services.campaign_knowledge_service import CampaignKnowledgeService
+
+        with get_session() as session:
+            knowledge_service = CampaignKnowledgeService(session)
+            return knowledge_service.get_knowledge_for_prompt(campaign_id)
+    except Exception as exc:
+        print(f"ai_context_builder: Failed to load campaign knowledge: {exc}")
+        return None

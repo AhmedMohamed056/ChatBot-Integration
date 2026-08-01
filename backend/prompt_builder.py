@@ -86,6 +86,7 @@ def _coerce_context(context: Any) -> AIContext:
                 visitor=context.get("visitor"),
                 campaign=context.get("campaign"),
                 supervisor=context.get("supervisor"),
+                campaign_knowledge=context.get("campaign_knowledge"),
                 calendar=context.get("calendar") or [],
                 today_prayers=context.get("today_prayers") or [],
                 next_prayer=context.get("next_prayer"),
@@ -93,6 +94,7 @@ def _coerce_context(context: Any) -> AIContext:
                 current_day=context.get("current_day"),
                 language=context.get("language") or "ar",
                 raw_message=context.get("raw_message") or "",
+                conversation_memory=context.get("conversation_memory"),
             )
         except Exception:
             return AIContext()
@@ -178,6 +180,22 @@ def _visitor_section(ctx: AIContext) -> list[str]:
         lines.append(f"Campaign: {campaign}")
     return lines
 
+def _campaign_knowledge_section(ctx: AIContext) -> list[str]:
+    """Build the CAMPAIGN KNOWLEDGE section for supervisor-taught facts."""
+    knowledge = ctx.campaign_knowledge
+    if not isinstance(knowledge, list) or not knowledge:
+        return []
+
+    lines = ["CAMPAIGN KNOWLEDGE"]
+    lines.append("Stable facts taught by the campaign supervisor. Use these with highest priority.")
+    lines.append("These are authoritative facts about the campaign that should override any other information.")
+
+    for i, fact in enumerate(knowledge, 1):
+        if isinstance(fact, str) and fact.strip():
+            lines.append(f"Fact {i}: {fact.strip()}")
+
+    return lines
+
 def _supervisor_section(ctx: AIContext) -> list[str]:
     """Build the SUPERVISOR section for authorized WhatsApp supervisors."""
     supervisor = ctx.supervisor
@@ -199,6 +217,7 @@ def _supervisor_section(ctx: AIContext) -> list[str]:
         return []
 
     lines = ["SUPERVISOR"]
+    lines.append("You are speaking with an authorized campaign supervisor.")
     if name:
         lines.append(f"Supervisor Name: {name}")
     if phone:
@@ -263,6 +282,47 @@ def _user_message_section(ctx: AIContext) -> list[str]:
     message = _as_str(ctx.raw_message)
     return ["VISITOR MESSAGE", message]
 
+def _conversation_memory_section(ctx: AIContext) -> list[str]:
+    """Build the CONVERSATION MEMORY section for maintaining context."""
+    memory = ctx.conversation_memory
+    if not isinstance(memory, dict):
+        return []
+
+    # Extract memory fields
+    current_topic = _as_str(memory.get("current_topic"))
+    conversation_summary = _as_str(memory.get("conversation_summary"))
+    last_edited_field = _as_str(memory.get("last_edited_field"))
+    recent_messages = memory.get("recent_messages")
+    pending_draft = memory.get("pending_draft")
+
+    # Only include section if we have meaningful memory
+    if not any([current_topic, conversation_summary, last_edited_field, recent_messages, pending_draft]):
+        return []
+
+    lines = ["CONVERSATION MEMORY"]
+    lines.append("Use this memory to understand references like 'اجعله أقصر', 'غيرها', 'احذف الفقرة الثانية'")
+
+    if current_topic:
+        lines.append(f"Current Topic: {current_topic}")
+    if conversation_summary:
+        lines.append(f"Conversation Summary: {conversation_summary}")
+    if last_edited_field:
+        lines.append(f"Last Edited Field: {last_edited_field}")
+    if pending_draft:
+        lines.append(f"Pending Draft: {pending_draft}")
+
+    # Format recent messages
+    if isinstance(recent_messages, list) and recent_messages:
+        lines.append("Recent Messages:")
+        for msg in recent_messages[-5:]:  # Last 5 messages
+            if isinstance(msg, dict):
+                direction = msg.get("direction", "unknown")
+                text = _as_str(msg.get("text", ""))
+                if text:
+                    lines.append(f"  [{direction}] {text[:100]}")  # Limit message length
+
+    return lines
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -302,6 +362,11 @@ def build_prompt(system_prompt: str, context: Union[AIContext, dict, None]) -> s
     if lang_lines:
         sections.append(lang_lines)
 
+    # Campaign Knowledge section has HIGHEST priority - supervisor-taught facts
+    knowledge_lines = _campaign_knowledge_section(ctx)
+    if knowledge_lines:
+        sections.append(knowledge_lines)
+
     # Supervisor section takes priority over visitor for supervisors
     supervisor_lines = _supervisor_section(ctx)
     if supervisor_lines:
@@ -318,6 +383,11 @@ def build_prompt(system_prompt: str, context: Union[AIContext, dict, None]) -> s
     prayer_lines = _prayer_section(ctx)
     if prayer_lines:
         sections.append(prayer_lines)
+
+    # Conversation memory section for maintaining context across messages
+    memory_lines = _conversation_memory_section(ctx)
+    if memory_lines:
+        sections.append(memory_lines)
 
     # The user message section is always included.
     sections.append(_user_message_section(ctx))

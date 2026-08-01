@@ -148,13 +148,38 @@ class CampaignLifecycleService:
             self.session, supervisor, conversation_id
         )
 
+        # Load and update conversation memory
+        from services.conversation_memory_service import ConversationMemoryService
+
+        memory_service = ConversationMemoryService(self.session)
+
+        # Update memory with the new message (before getting response)
+        memory_service.update_memory_from_message(
+            conversation_id=conversation_id,
+            message=message,
+            direction="inbound",
+            sender_phone=supervisor.phone_number
+        )
+
         # Create a custom VisitorFlow that injects supervisor context
         visitor_flow = VisitorFlow()
         result = visitor_flow.handle_message_with_supervisor(
             phone=supervisor.phone_number,
             message=message,
-            supervisor_context=supervisor_context
+            supervisor_context=supervisor_context,
+            conversation_id=conversation_id
         )
+
+        # Update memory with the response
+        if result.handled and result.reply:
+            memory_service.update_memory_from_message(
+                conversation_id=conversation_id,
+                message=result.reply,
+                direction="outbound",
+                sender_phone=None,
+                response=None
+            )
+
         return result.reply if result.handled else ""
 
     def _merge_extraction(
@@ -260,13 +285,30 @@ class CampaignLifecycleService:
             or 0
         ) + 1
 
+        # Build comprehensive campaign snapshot with all available information
         snapshot = {
             "campaign_name": campaign.campaign_name,
             "description": campaign.description,
+            "campaign_type": campaign.campaign_type,
             "start_date": str(campaign.start_date) if campaign.start_date else None,
             "end_date": str(campaign.end_date) if campaign.end_date else None,
-            "location": campaign.notes,
+            "status": campaign.status,
+            "notes": campaign.notes,
+            "lock_version": campaign.lock_version,
+            "owner_supervisor_id": campaign.owner_supervisor_id,
+            "current_version": version_number,
+            "created_at": str(campaign.created_at) if campaign.created_at else None,
+            "updated_at": str(campaign.updated_at) if campaign.updated_at else None,
         }
+
+        # Include owner/supervisor information
+        if campaign.owner:
+            snapshot["owner"] = {
+                "supervisor_id": campaign.owner.id,
+                "phone_number": campaign.owner.phone_number,
+                "display_name": campaign.owner.display_name,
+                "is_active": campaign.owner.is_active,
+            }
         self.session.add(
             CampaignVersion(
                 campaign_id=campaign.id,

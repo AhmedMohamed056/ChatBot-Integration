@@ -171,7 +171,8 @@ class VisitorFlow:
         self,
         phone: str,
         message: str,
-        supervisor_context: SupervisorContext
+        supervisor_context: SupervisorContext,
+        conversation_id: Optional[int] = None
     ) -> VisitorFlowResult:
         """Handle an incoming message from an authorized supervisor with context injection.
 
@@ -193,6 +194,8 @@ class VisitorFlow:
             The incoming message text.
         supervisor_context : SupervisorContext
             The supervisor context object containing name, phone, campaign info, etc.
+        conversation_id : Optional[int]
+            Optional conversation ID for loading conversation memory.
 
         Returns
         -------
@@ -206,12 +209,13 @@ class VisitorFlow:
             if calendar_reply:
                 return VisitorFlowResult(reply=calendar_reply, handled=True)
 
-            # Step 1: Build AIContext with supervisor context
-            logger.info("Building AIContext with supervisor context")
+            # Step 1: Build AIContext with supervisor context and conversation memory
+            logger.info("Building AIContext with supervisor context and conversation memory")
             ai_context = build_ai_context(
                 message=message,
                 phone=phone,
-                supervisor=supervisor_context
+                supervisor=supervisor_context,
+                conversation_id=conversation_id
             )
 
             # Step 2: Load Visitor System Prompt
@@ -219,13 +223,13 @@ class VisitorFlow:
             system_prompt = build_visitor_system_prompt()
 
             # Step 3: Build Dynamic Prompt (includes system_prompt + context + user message)
-            logger.info("Building Prompt with supervisor context")
+            logger.info("Building Prompt with supervisor context and conversation memory")
             full_prompt = build_prompt(system_prompt=system_prompt, context=ai_context)
 
             # Step 4: Call GeminiClient
             # Note: build_prompt already includes the system prompt, so we pass empty system_prompt
             # to avoid duplication. The full_prompt contains everything needed.
-            logger.info("Calling Gemini with supervisor context")
+            logger.info("Calling Gemini with supervisor context and conversation memory")
             gemini_client = self._get_gemini_client()
             if gemini_client is None:
                 logger.error("GeminiClient is not available")
@@ -240,7 +244,7 @@ class VisitorFlow:
             )
 
             # Step 5: Return Reply
-            logger.info("Reply generated successfully with supervisor context")
+            logger.info("Reply generated successfully with supervisor context and conversation memory")
             return VisitorFlowResult(
                 reply=response,
                 handled=True
