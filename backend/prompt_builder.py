@@ -180,6 +180,7 @@ def _visitor_section(ctx: AIContext) -> list[str]:
         lines.append(f"Campaign: {campaign}")
     return lines
 
+
 def _campaign_knowledge_section(ctx: AIContext) -> list[str]:
     """Build the CAMPAIGN KNOWLEDGE section for supervisor-taught facts."""
     knowledge = ctx.campaign_knowledge
@@ -238,6 +239,68 @@ def _supervisor_section(ctx: AIContext) -> list[str]:
     return lines
 
 
+def _campaign_section(ctx: AIContext) -> list[str]:
+    """Build the CURRENT CAMPAIGN section with full campaign details.
+    
+    This section is only included when a supervisor is present and has
+    an associated campaign. It provides complete campaign information
+    including the full description without any truncation.
+    """
+    # Only show current campaign section for supervisors
+    if not ctx.supervisor:
+        return []
+    
+    campaign = ctx.campaign
+    if not isinstance(campaign, dict):
+        return []
+    
+    # Extract campaign fields
+    name = _as_str(campaign.get("campaign_name")) or _as_str(campaign.get("name"))
+    description = _as_str(campaign.get("description"))
+    notes = _as_str(campaign.get("notes"))
+    operation = _as_str(campaign.get("operation"))
+    location = _as_str(campaign.get("location")) or _as_str(campaign.get("notes"))
+    campaign_type = _as_str(campaign.get("campaign_type"))
+    status = _as_str(campaign.get("status"))
+    start_date = _as_str(campaign.get("start_date"))
+    end_date = _as_str(campaign.get("end_date"))
+    
+    # Only include section if we have at least a campaign name
+    if not name:
+        return []
+    
+    lines = ["CURRENT CAMPAIGN"]
+    lines.append(f"Campaign Name: {name}")
+    
+    # Description is included in full without any truncation
+    if description:
+        lines.append(f"Description: {description}")
+        lines.append("(كامل بدون أي Truncation)")
+    
+    if notes:
+        lines.append(f"Notes: {notes}")
+    
+    if operation:
+        lines.append(f"Operation: {operation}")
+    
+    if location:
+        lines.append(f"Location: {location}")
+    
+    if campaign_type:
+        lines.append(f"Campaign Type: {campaign_type}")
+    
+    if status:
+        lines.append(f"Status: {status}")
+    
+    if start_date:
+        lines.append(f"Start Date: {start_date}")
+    
+    if end_date:
+        lines.append(f"End Date: {end_date}")
+    
+    return lines
+
+
 def _calendar_section(ctx: AIContext) -> list[str]:
     events = ctx.calendar
     if not isinstance(events, list) or not events:
@@ -290,20 +353,38 @@ def _conversation_memory_section(ctx: AIContext) -> list[str]:
 
     # Extract memory fields
     current_topic = _as_str(memory.get("current_topic"))
+    last_user_intent = _as_str(memory.get("last_user_intent"))
+    last_assistant_action = _as_str(memory.get("last_assistant_action"))
+    pending_context = memory.get("pending_context")
     conversation_summary = _as_str(memory.get("conversation_summary"))
     last_edited_field = _as_str(memory.get("last_edited_field"))
     recent_messages = memory.get("recent_messages")
     pending_draft = memory.get("pending_draft")
 
     # Only include section if we have meaningful memory
-    if not any([current_topic, conversation_summary, last_edited_field, recent_messages, pending_draft]):
+    if not any([current_topic, last_user_intent, last_assistant_action, pending_context,
+                conversation_summary, last_edited_field, recent_messages, pending_draft]):
         return []
 
     lines = ["CONVERSATION MEMORY"]
-    lines.append("Use this memory to understand references like 'اجعله أقصر', 'غيرها', 'احذف الفقرة الثانية'")
+    lines.append("Use this memory to understand references like 'اجعله أقصر', 'غيرها', 'احذف الفقرة الثانية', 'it', 'this', 'No', 'Cancel'")
 
     if current_topic:
         lines.append(f"Current Topic: {current_topic}")
+    if last_user_intent:
+        lines.append(f"Last User Intent: {last_user_intent}")
+    if last_assistant_action:
+        lines.append(f"Last Assistant Action: {last_assistant_action}")
+    if pending_context and isinstance(pending_context, dict):
+        field = _as_str(pending_context.get("field"))
+        old_value = _as_str(pending_context.get("old_value"))
+        new_value = _as_str(pending_context.get("new_value"))
+        if field:
+            lines.append(f"Pending Context - Field: {field}")
+            if old_value:
+                lines.append(f"Pending Context - Old Value: {old_value[:100]}")
+            if new_value:
+                lines.append(f"Pending Context - New Value: {new_value[:100]}")
     if conversation_summary:
         lines.append(f"Conversation Summary: {conversation_summary}")
     if last_edited_field:
@@ -371,6 +452,11 @@ def build_prompt(system_prompt: str, context: Union[AIContext, dict, None]) -> s
     supervisor_lines = _supervisor_section(ctx)
     if supervisor_lines:
         sections.append(supervisor_lines)
+
+    # Current Campaign section - full campaign details
+    campaign_lines = _campaign_section(ctx)
+    if campaign_lines:
+        sections.append(campaign_lines)
 
     visitor_lines = _visitor_section(ctx)
     if visitor_lines:

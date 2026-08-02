@@ -12,6 +12,7 @@ from campaign_update_extraction_service import extract_campaign_update
 from db.models import Campaign, CampaignUpdate
 from db.platform_models import CampaignVersion, Supervisor
 from db.repositories.platform_repository import OutboxRepository
+from services.conversation_memory_service import ConversationMemoryService
 from services.conversation_service import ConversationService
 from services.intent_router import Intent, detect_intent
 from services.supervisor_context_service import (
@@ -68,6 +69,17 @@ class CampaignLifecycleService:
         message: str,
         original_message: str,
     ) -> str:
+        # Initialize memory service
+        memory_service = ConversationMemoryService(self.session)
+        
+        # Update memory with inbound message
+        memory_service.update_memory_from_message(
+            conversation_id=conversation_id,
+            message=message,
+            direction="inbound",
+            sender_phone=supervisor.phone_number
+        )
+        
         owned = get_owned_campaign(self.session, supervisor.id)
         state = self.conversations.get_state(conversation_id)
         data = dict(state.state_data or {})
@@ -80,12 +92,34 @@ class CampaignLifecycleService:
             self.conversations.set_state(
                 state, state_name="IDLE", state_data={"draft": {}, "missing": []}
             )
-            return "تم إلغاء العملية. يمكنك البدء من جديد عند الحاجة."
+            # Clear task state in memory (set to IDLE)
+            memory_service.set_idle(conversation_id)
+            reply = "تم إلغاء العملية. يمكنك البدء من جديد عند الحاجة."
+            # Update memory with outbound response
+            memory_service.update_memory_from_message(
+                conversation_id=conversation_id,
+                message=reply,
+                direction="outbound",
+                sender_phone=None,
+                response=None
+            )
+            return reply
 
         if intent_result.intent == Intent.CONFIRM_OK and pending:
-            return self._commit(
+            reply = self._commit(
                 supervisor, state, draft, original_message, operation=operation
             )
+            # Clear task state in memory after successful commit
+            memory_service.set_idle(conversation_id)
+            # Update memory with outbound response
+            memory_service.update_memory_from_message(
+                conversation_id=conversation_id,
+                message=reply,
+                direction="outbound",
+                sender_phone=None,
+                response=None
+            )
+            return reply
 
         if intent_result.intent == Intent.DELETE_CAMPAIGN:
             operation = "delete"
@@ -98,7 +132,16 @@ class CampaignLifecycleService:
                     state_name="WAITING_FOR_MISSING_FIELD",
                     state_data=data,
                 )
-                return "من فضلك أرسل سبب الحذف فقط."
+                reply = "من فضلك أرسل سبب الحذف فقط."
+                # Update memory with outbound response
+                memory_service.update_memory_from_message(
+                    conversation_id=conversation_id,
+                    message=reply,
+                    direction="outbound",
+                    sender_phone=None,
+                    response=None
+                )
+                return reply
 
         if intent_result.intent in {
             Intent.CREATE_CAMPAIGN,
@@ -123,10 +166,19 @@ class CampaignLifecycleService:
                     state_name="WAITING_FOR_MISSING_FIELD",
                     state_data=data,
                 )
-                return (
+                reply = (
                     f"من فضلك أرسل {_field_label(missing[0])} فقط "
                     "(سؤال واحد في كل مرة)."
                 )
+                # Update memory with outbound response
+                memory_service.update_memory_from_message(
+                    conversation_id=conversation_id,
+                    message=reply,
+                    direction="outbound",
+                    sender_phone=None,
+                    response=None
+                )
+                return reply
             data["draft"] = draft
             data["missing"] = []
             self.conversations.set_state(
@@ -134,31 +186,36 @@ class CampaignLifecycleService:
                 state_name="WAITING_FOR_CONFIRMATION",
                 state_data=data,
             )
-            return self._review_summary(draft, operation=operation, owned=owned)
+            reply = self._review_summary(draft, operation=operation, owned=owned)
+            # Update memory with outbound response
+            memory_service.update_memory_from_message(
+                conversation_id=conversation_id,
+                message=reply,
+                direction="outbound",
+                sender_phone=None,
+                response=None
+            )
+            return reply
 
         if intent_result.intent == Intent.KNOWLEDGE_QUESTION:
-            return (
+            reply = (
                 "في المحادثة الخاصة أساعدك في إدارة حملتك فقط. "
                 "لأسئلة المعرفة استخدم المجموعة، أو اطلب تحديث الحملة هنا."
             )
+            # Update memory with outbound response
+            memory_service.update_memory_from_message(
+                conversation_id=conversation_id,
+                message=reply,
+                direction="outbound",
+                sender_phone=None,
+                response=None
+            )
+            return reply
 
         # Fallback for general questions - call AI with supervisor context
         # Build supervisor context for injection into AI requests
         supervisor_context = build_supervisor_context(
             self.session, supervisor, conversation_id
-        )
-
-        # Load and update conversation memory
-        from services.conversation_memory_service import ConversationMemoryService
-
-        memory_service = ConversationMemoryService(self.session)
-
-        # Update memory with the new message (before getting response)
-        memory_service.update_memory_from_message(
-            conversation_id=conversation_id,
-            message=message,
-            direction="inbound",
-            sender_phone=supervisor.phone_number
         )
 
         # Create a custom VisitorFlow that injects supervisor context
