@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from ai_context_builder import build_context as build_ai_context
 from gemini_client import GeminiClient, GeminiClientError
-from prompts import build_visitor_system_prompt
+from prompts import build_supervisor_system_prompt, build_visitor_system_prompt
 from prompt_builder import build_prompt
 from services.supervisor_context_service import SupervisorContext
 
@@ -218,9 +218,9 @@ class VisitorFlow:
                 conversation_id=conversation_id
             )
 
-            # Step 2: Load Visitor System Prompt
-            logger.info("Loading Visitor System Prompt")
-            system_prompt = build_visitor_system_prompt()
+            # Step 2: Load Supervisor System Prompt
+            logger.info("Loading Supervisor System Prompt")
+            system_prompt = build_supervisor_system_prompt()
 
             # Step 3: Build Dynamic Prompt (includes system_prompt + context + user message)
             logger.info("Building Prompt with supervisor context and conversation memory")
