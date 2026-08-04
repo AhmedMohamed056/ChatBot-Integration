@@ -107,8 +107,13 @@ class CampaignLifecycleService:
             return reply
 
         if intent_result.intent == Intent.CONFIRM_OK and pending:
+            # Persist the ORIGINAL business request captured when the workflow
+            # first started (e.g. "غير وصف الحملة"), not the confirmation word
+            # ("نعم"/"OK") that triggers this turn. Fall back to the current
+            # message only if the request was never stored.
+            business_request = draft.get("original_request") or original_message
             reply = self._commit(
-                supervisor, state, draft, original_message, operation=operation
+                supervisor, state, draft, business_request, operation=operation
             )
             # Clear task state in memory after successful commit
             memory_service.set_idle(conversation_id)
@@ -125,6 +130,8 @@ class CampaignLifecycleService:
         if intent_result.intent == Intent.DELETE_CAMPAIGN:
             operation = "delete"
             data["operation"] = operation
+            # Capture the first business request that triggered the workflow
+            draft.setdefault("original_request", message)
             draft.setdefault("campaign_name", owned.campaign_name if owned else "")
             if not draft.get("deletion_reason"):
                 data["draft"] = draft
@@ -148,6 +155,10 @@ class CampaignLifecycleService:
             Intent.CREATE_CAMPAIGN,
             Intent.UPDATE_CAMPAIGN,
         } or state.state_name in {"COLLECTING", "WAITING_FOR_MISSING_FIELD"}:
+            # Capture the first business request that triggered the workflow.
+            # setdefault ensures later turns (new description, missing field)
+            # never overwrite the original request.
+            draft.setdefault("original_request", message)
             if owned and not draft.get("campaign_name"):
                 draft.update(seed_draft_from_campaign(owned))
             extraction = extract_campaign_update(message)

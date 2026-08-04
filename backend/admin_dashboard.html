@@ -250,6 +250,86 @@
       margin-bottom: 18px;
       line-height: 1.7;
     }
+    /* ===== Structured record presentation (presentation-only) ===== */
+    .activity-list { display: grid; gap: 14px; }
+    .activity-card {
+      background: linear-gradient(155deg, var(--panel-2), var(--panel));
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 18px;
+    }
+    .activity-head {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      gap: 12px; margin-bottom: 14px; flex-wrap: wrap;
+    }
+    .activity-title {
+      font-family: 'Cairo', sans-serif; font-size: 18px; color: var(--gold-soft);
+      display: flex; align-items: center; gap: 8px; margin: 0;
+    }
+    .date-chip {
+      font-size: 12px; padding: 5px 12px; border-radius: 999px;
+      background: rgba(227,168,87,0.10); color: var(--gold-soft);
+      border: 1px solid rgba(227,168,87,0.22); white-space: nowrap;
+    }
+    .kv-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px 18px;
+    }
+    .kv-label {
+      color: var(--sage); font-size: 12px; margin-bottom: 3px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .kv-value {
+      color: var(--sand); font-size: 14px; line-height: 1.6;
+      word-break: break-word; white-space: pre-wrap;
+    }
+    .kv-value.strong { color: var(--gold-soft); font-weight: 700; }
+    .card-actions { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn.small { padding: 8px 16px; font-size: 13px; margin-top: 0; }
+    /* Centered modal (View Details) */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+      z-index: 60; display: flex; align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .modal-card {
+      width: min(680px, 100%); max-height: 90vh; overflow-y: auto;
+      background: linear-gradient(160deg, var(--panel-2), var(--panel));
+      border: 1px solid var(--line); border-radius: 18px; padding: 24px;
+      box-shadow: 0 30px 80px -20px rgba(0,0,0,0.7);
+    }
+    .section-block { margin-bottom: 20px; }
+    .section-title {
+      font-family: 'Cairo', sans-serif; font-size: 15px; color: var(--sand);
+      display: flex; align-items: center; gap: 8px;
+      padding-bottom: 8px; margin: 0 0 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .diff-list { display: grid; gap: 10px; }
+    .diff-row {
+      border: 1px solid var(--line); border-radius: 12px; padding: 12px;
+      background: rgba(244,239,230,0.03);
+    }
+    .diff-field { font-size: 13px; font-weight: 700; color: var(--gold-soft); margin-bottom: 8px; }
+    .diff-values { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .diff-new .kv-value { color: #9fe0b0; }
+    .raw-block { margin-top: 8px; }
+    .raw-toggle {
+      background: transparent; border: none; color: var(--sage);
+      cursor: pointer; font-family: 'Tajawal', sans-serif; font-size: 13px; padding: 6px 0;
+    }
+    .raw-toggle:hover { color: var(--gold-soft); }
+    .raw-json {
+      margin: 8px 0 0; padding: 14px; border-radius: 12px;
+      background: rgba(0,0,0,0.28); border: 1px solid var(--line);
+      color: var(--sage); font-size: 12px; line-height: 1.6;
+      direction: ltr; text-align: left;
+      white-space: pre-wrap; word-break: break-word;
+      max-height: 320px; overflow: auto;
+    }
+    @media (max-width: 600px) {
+      .diff-values { grid-template-columns: 1fr; }
+    }
     @media (max-width: 900px) {
       .admin-shell { grid-template-columns: 1fr; }
     }
@@ -301,6 +381,289 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || 'Request failed');
       return data;
+    }
+
+    // ===== Structured record presentation (presentation-only, no backend changes) =====
+    // The WhatsApp supervisor pipeline stores a full campaign snapshot as a
+    // Python-dict string inside CampaignUpdate.new_value, exposed by the API as
+    // `extracted_info`. These helpers parse that blob CLIENT-SIDE so admins see
+    // readable fields instead of a raw dict/JSON blob. Nothing is invented: every
+    // value rendered comes from the API response; missing fields render as "—".
+    const el = React.createElement;
+
+    // Tolerant parser for Python literals (single quotes, None/True/False) and JSON.
+    function parsePyLiteral(s) {
+      let i = 0;
+      const ws = () => { while (i < s.length && /\s/.test(s[i])) i++; };
+      function parseString() {
+        const q = s[i++];
+        let out = '';
+        while (i < s.length) {
+          const c = s[i++];
+          if (c === '\\') {
+            const n = s[i++];
+            out += n === 'n' ? '\n' : n === 't' ? '\t' : n === 'r' ? '\r' : n;
+          } else if (c === q) {
+            return out;
+          } else {
+            out += c;
+          }
+        }
+        throw new Error('unterminated string');
+      }
+      function parseAtom() {
+        const start = i;
+        while (i < s.length && !/[,:}\])\s]/.test(s[i])) i++;
+        const tok = s.slice(start, i);
+        if (tok === 'None' || tok === 'null') return null;
+        if (tok === 'True' || tok === 'true') return true;
+        if (tok === 'False' || tok === 'false') return false;
+        if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(tok)) return Number(tok);
+        if (tok === '') throw new Error('empty atom');
+        return tok;
+      }
+      function parseArray(close) {
+        i++; const arr = []; ws();
+        if (s[i] === close) { i++; return arr; }
+        while (i < s.length) {
+          arr.push(parseValue()); ws();
+          if (s[i] === ',') { i++; ws(); if (s[i] === close) { i++; return arr; } continue; }
+          if (s[i] === close) { i++; return arr; }
+          throw new Error('bad array');
+        }
+        throw new Error('unterminated array');
+      }
+      function parseObject() {
+        i++; const obj = {}; ws();
+        if (s[i] === '}') { i++; return obj; }
+        while (i < s.length) {
+          ws();
+          const key = parseValue(); ws();
+          if (s[i] !== ':') throw new Error('expected :');
+          i++;
+          obj[key] = parseValue(); ws();
+          if (s[i] === ',') { i++; continue; }
+          if (s[i] === '}') { i++; return obj; }
+          throw new Error('bad object');
+        }
+        throw new Error('unterminated object');
+      }
+      function parseValue() {
+        ws();
+        const ch = s[i];
+        if (ch === '{') return parseObject();
+        if (ch === '[') return parseArray(']');
+        if (ch === '(') return parseArray(')');
+        if (ch === "'" || ch === '"') return parseString();
+        return parseAtom();
+      }
+      return parseValue();
+    }
+
+    function parseStructured(raw) {
+      if (raw == null) return null;
+      if (typeof raw === 'object') return raw;
+      const s = String(raw).trim();
+      if (!s) return null;
+      try { return JSON.parse(s); } catch (e) { /* not JSON */ }
+      try { return parsePyLiteral(s); } catch (e) { return null; }
+    }
+
+    function dash(v) {
+      if (v === null || v === undefined) return '—';
+      const s = String(v).trim();
+      return s === '' ? '—' : s;
+    }
+
+    // Classify a WhatsApp message as a bare confirmation ("OK", "نعم", ...) vs a
+    // real business request ("غير وصف الحملة"). Used only by the Campaign Details
+    // panel so a confirmation never gets shown as the original request.
+    function isConfirmationText(raw) {
+      if (!raw) return false;
+      let s = String(raw).trim().toLowerCase();
+      s = s.replace(/[ً-ٰٟ]/g, '');       // strip Arabic diacritics
+      s = s.replace(/[إأآ]/g, 'ا').replace(/ة/g, 'ه');   // normalize alef / ta-marbuta
+      s = s.replace(/[^\p{L}]/gu, '');                    // drop spaces, punctuation, emoji
+      if (!s) return false;
+      const CONFIRM = new Set([
+        'ok', 'okay', 'okey', 'k', 'kk', 'yes', 'y', 'yep', 'yeah', 'yup',
+        'sure', 'fine', 'confirm', 'confirmed', 'done', 'agree', 'agreed',
+        'approve', 'approved', 'correct',
+        'نعم', 'ايوه', 'ايوا', 'اجل', 'موافق', 'موافقه', 'تمام', 'تم',
+        'اوك', 'اوكي', 'اوكيه', 'صح', 'صحيح', 'ماشي', 'حسنا', 'اكيد'
+      ]);
+      return CONFIRM.has(s);
+    }
+
+    function deriveAction(parsed, raw) {
+      const status = parsed && typeof parsed === 'object'
+        ? parsed.status
+        : (typeof parsed === 'string' ? parsed : raw);
+      return status === 'deleted' ? 'Campaign Deleted' : 'Campaign Updated';
+    }
+
+    // Normalize a Campaign-Activity item OR a Campaign-messages row into one shape.
+    function normalizeRecord(src) {
+      const raw = src.extracted_info;
+      const parsed = parseStructured(raw);
+      const isObj = parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+      const owner = isObj && parsed.owner && typeof parsed.owner === 'object' ? parsed.owner : {};
+      return {
+        raw: raw,
+        snap: isObj ? parsed : null,
+        campaignName: (isObj && parsed.campaign_name) || src.campaign || src.campaign_name || '',
+        supervisor: owner.display_name || src.updated_by || '',
+        phone: owner.phone_number || '',
+        status: isObj ? parsed.status : (typeof parsed === 'string' ? parsed : ''),
+        version: isObj ? parsed.current_version : null,
+        description: isObj ? parsed.description : null,
+        source: src.source || '',
+        originalMessage: src.last_message || src.original_message || '',
+        confirmationMessage: src.confirmation_message || '',
+        timestamp: src.date || src.created_at || '',
+        updateId: (src.id !== undefined && src.id !== null) ? src.id : null,
+        auditId: (src.audit_id !== undefined && src.audit_id !== null) ? src.audit_id : null,
+        outboxId: (src.outbox_id !== undefined && src.outbox_id !== null) ? src.outbox_id : null,
+        action: deriveAction(parsed, raw),
+      };
+    }
+
+    // Content fields shown in the "Changed Fields" section (old is unknown → "—").
+    const RECORD_CONTENT_FIELDS = [
+      ['description', 'Description'],
+      ['campaign_type', 'Campaign Type'],
+      ['status', 'Status'],
+      ['start_date', 'Start Date'],
+      ['end_date', 'End Date'],
+      ['notes', 'Notes'],
+    ];
+
+    function KV({ label, value, icon, strong }) {
+      return el('div', { className: 'kv' },
+        el('div', { className: 'kv-label' }, icon ? el('span', null, icon) : null, label),
+        el('div', { className: 'kv-value' + (strong ? ' strong' : '') }, dash(value))
+      );
+    }
+
+    function SectionBlock({ title, icon, children }) {
+      return el('div', { className: 'section-block' },
+        el('div', { className: 'section-title' }, icon ? el('span', null, icon) : null, title),
+        children
+      );
+    }
+
+    function RawJsonBlock({ raw }) {
+      const [open, setOpen] = useState(false);
+      let pretty = raw == null ? '—' : String(raw);
+      const parsed = parseStructured(raw);
+      if (parsed && typeof parsed === 'object') {
+        try { pretty = JSON.stringify(parsed, null, 2); } catch (e) { /* keep raw */ }
+      }
+      return el('div', { className: 'raw-block' },
+        el('button', { className: 'raw-toggle', onClick: () => setOpen((o) => !o) },
+          (open ? '▲ ' : '▼ ') + 'Show Raw JSON'),
+        open ? el('pre', { className: 'raw-json' }, pretty) : null
+      );
+    }
+
+    function ChangedFields({ snap }) {
+      if (!snap || typeof snap !== 'object') {
+        return el('div', { className: 'kv-value' }, '—');
+      }
+      return el('div', { className: 'diff-list' },
+        RECORD_CONTENT_FIELDS.map((pair) =>
+          el('div', { className: 'diff-row', key: pair[0] },
+            el('div', { className: 'diff-field' }, '📌 ' + pair[1]),
+            el('div', { className: 'diff-values' },
+              el('div', { className: 'diff-old' },
+                el('div', { className: 'kv-label' }, 'Old'),
+                el('div', { className: 'kv-value' }, '—')
+              ),
+              el('div', { className: 'diff-new' },
+                el('div', { className: 'kv-label' }, 'New'),
+                el('div', { className: 'kv-value' }, dash(snap[pair[0]]))
+              )
+            )
+          )
+        )
+      );
+    }
+
+    // Full 4-section detail used by the Campaign-Activity "View Details" modal.
+    function RecordDetails({ record }) {
+      return el('div', null,
+        el(SectionBlock, { title: 'Campaign & Supervisor', icon: '📋' },
+          el('div', { className: 'kv-grid' },
+            el(KV, { label: 'Campaign Name', value: record.campaignName, icon: '📢', strong: true }),
+            el(KV, { label: 'Supervisor', value: record.supervisor, icon: '👤' }),
+            el(KV, { label: 'Phone Number', value: record.phone, icon: '📱' }),
+            el(KV, { label: 'Action', value: record.action, icon: '📝' }),
+            el(KV, { label: 'Source', value: record.source, icon: '🔗' }),
+            el(KV, { label: 'Version', value: record.version, icon: '🔖' }),
+            el(KV, { label: 'Timestamp', value: formatUploadDate(record.timestamp), icon: '🕒' })
+          )
+        ),
+        el(SectionBlock, { title: 'Changed Fields', icon: '📌' },
+          el(ChangedFields, { snap: record.snap })
+        ),
+        el(SectionBlock, { title: 'WhatsApp Conversation', icon: '📱' },
+          el('div', { className: 'kv-grid' },
+            el(KV, { label: 'Original Message', value: record.originalMessage }),
+            el(KV, { label: 'Confirmation Message', value: record.confirmationMessage })
+          )
+        ),
+        el(SectionBlock, { title: 'Technical Metadata', icon: '🧾' },
+          el('div', { className: 'kv-grid' },
+            el(KV, { label: 'Audit ID', value: record.auditId }),
+            el(KV, { label: 'Outbox Event', value: record.outboxId }),
+            el(KV, { label: 'Campaign Update ID', value: record.updateId }),
+            el(KV, { label: 'Campaign Version ID', value: record.version })
+          )
+        ),
+        el(RawJsonBlock, { raw: record.raw })
+      );
+    }
+
+    function ActivityCard({ record, onView }) {
+      return el('div', { className: 'activity-card' },
+        el('div', { className: 'activity-head' },
+          el('h3', { className: 'activity-title' }, '📢 ' + dash(record.campaignName)),
+          el('span', { className: 'date-chip' }, '🕒 ' + formatUploadDate(record.timestamp))
+        ),
+        el('div', { className: 'kv-grid' },
+          el(KV, { label: 'Action', value: record.action, icon: '📝' }),
+          el(KV, { label: 'Supervisor', value: record.supervisor, icon: '👤' }),
+          el(KV, { label: 'Phone', value: record.phone, icon: '📱' }),
+          el(KV, { label: 'Status', value: record.status })
+        ),
+        record.description
+          ? el('div', { style: { marginTop: '12px' } },
+              el('div', { className: 'kv-label' }, '📝 Description'),
+              el('div', { className: 'kv-value' }, dash(record.description))
+            )
+          : null,
+        el('div', { className: 'card-actions' },
+          el('button', { className: 'btn small', onClick: onView }, 'View Details')
+        )
+      );
+    }
+
+    function ActivityDetailsModal({ record, onClose }) {
+      useEffect(() => {
+        function onKey(ev) { if (ev.key === 'Escape') onClose(); }
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, []);
+      return el('div', { className: 'modal-overlay', onClick: onClose },
+        el('div', { className: 'modal-card', onClick: (ev) => ev.stopPropagation() },
+          el('div', { className: 'details-header' },
+            el('h2', { style: { margin: 0, fontSize: '20px' } },
+              '📢 ' + (record.campaignName || 'Campaign Activity')),
+            el('button', { className: 'details-close', onClick: onClose, 'aria-label': 'Close' }, '×')
+          ),
+          el(RecordDetails, { record: record })
+        )
+      );
     }
 
     function Sidebar({ active, onSelect }) {
@@ -625,36 +988,57 @@
                     React.createElement('div', { className: 'label', style: { marginBottom: '12px' } },
                       `Latest Updates (${messages ? messages.length : 0})`
                     ),
-                    (messages || []).map((m) =>
-                      React.createElement('div', { className: 'update-card', key: m.id },
+                    (messages || []).map((m) => {
+                      const record = normalizeRecord(m);
+                      // One message row stores a single WhatsApp text. Route it to
+                      // the right slot: a bare confirmation ("Ok"/"نعم") shows under
+                      // Confirmation, a real request shows under Original Request.
+                      const msg = record.originalMessage;
+                      const isConfirm = isConfirmationText(msg);
+                      const originalRequest = isConfirm ? '' : msg;
+                      const confirmation = isConfirm ? msg : record.confirmationMessage;
+                      const aiDraft = record.description;
+                      return React.createElement('div', { className: 'update-card', key: m.id },
+                        React.createElement('h3', {
+                          className: 'activity-title',
+                          style: { marginBottom: '12px' }
+                        }, '📝 ' + record.action),
                         React.createElement('div', { className: 'update-meta' },
                           m.event_date && React.createElement('span', { className: 'meta-chip' }, `Event: ${m.event_date}`),
                           m.expires_at && React.createElement('span', { className: 'meta-chip' }, `Expires: ${m.expires_at}`),
-                          React.createElement('span', { className: 'meta-chip' }, `Created: ${formatUploadDate(m.created_at)}`),
+                          React.createElement('span', { className: 'meta-chip' }, `🕒 ${formatUploadDate(m.created_at)}`),
                           m.is_active === 0 && React.createElement('span', { className: 'meta-chip' }, 'Inactive')
                         ),
-                        React.createElement('div', { className: 'update-section' },
-                          React.createElement('div', { className: 'section-label' }, 'Extracted Information'),
-                          React.createElement('div', { className: 'section-value' }, m.extracted_info || '—')
+                        React.createElement('div', { className: 'kv-grid', style: { marginBottom: '4px' } },
+                          React.createElement(KV, { label: 'Campaign', value: record.campaignName, icon: '📢', strong: true }),
+                          React.createElement(KV, { label: 'Supervisor', value: record.supervisor, icon: '👤' }),
+                          React.createElement(KV, { label: 'Action', value: record.action, icon: '📝' }),
+                          React.createElement(KV, { label: 'Status', value: record.status }),
+                          React.createElement(KV, { label: 'Version', value: record.version, icon: '🔖' })
                         ),
-                        React.createElement('div', { className: 'update-section' },
-                          React.createElement('div', { className: 'section-label' }, 'Original Message'),
-                          React.createElement('div', { className: 'section-value' }, m.original_message || '—')
+                        React.createElement(SectionBlock, { title: 'Changed Fields', icon: '📌' },
+                          React.createElement(ChangedFields, { snap: record.snap })
                         ),
-                        React.createElement('div', { className: 'update-section' },
-                          React.createElement('div', { className: 'section-label' }, 'Date'),
-                          React.createElement('div', { className: 'section-value' }, m.event_date || formatUploadDate(m.created_at))
+                        React.createElement(SectionBlock, { title: 'WhatsApp Conversation', icon: '📱' },
+                          React.createElement('div', { className: 'kv-grid' },
+                            React.createElement(KV, { label: 'Original WhatsApp Request', value: originalRequest, icon: '💬' }),
+                            React.createElement(KV, { label: 'AI Generated Draft', value: aiDraft, icon: '🤖' }),
+                            React.createElement(KV, { label: 'Confirmation', value: confirmation, icon: '✅' })
+                          )
                         ),
-                        React.createElement('div', { className: 'actions-row' },
+                        React.createElement(SectionBlock, { title: 'Time', icon: '🕒' },
+                          React.createElement('div', { className: 'kv-value' }, formatUploadDate(record.timestamp))
+                        ),
+                        React.createElement(RawJsonBlock, { raw: record.raw }),
+                        React.createElement('div', { className: 'card-actions' },
                           React.createElement('button', {
-                            className: 'btn secondary danger',
-                            style: { marginTop: 0 },
+                            className: 'btn secondary danger small',
                             disabled: deletingId === m.id,
                             onClick: () => deleteMessage(m.id)
                           }, deletingId === m.id ? 'Deleting...' : 'Delete Update')
                         )
-                      )
-                    )
+                      );
+                    })
                   )
             )
         )
@@ -749,6 +1133,7 @@
       const [campaignReport, setCampaignReport] = useState([]);
       const [topQuestions, setTopQuestions] = useState([]);
       const [unanswered, setUnanswered] = useState([]);
+      const [activityModal, setActivityModal] = useState(null);
 
       useEffect(() => {
         apiGet('/admin/reports/campaign-activity')
@@ -770,28 +1155,18 @@
         React.createElement('p', { className: 'subtext' }, 'تقارير نشاط الحملات وأسئلة الزوار.'),
         React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
           React.createElement('h2', { style: { marginTop: 0 } }, 'Campaign Activity'),
-          React.createElement('table', { className: 'data-table' },
-            React.createElement('thead', null,
-              React.createElement('tr', null,
-                ['Campaign', 'Last Update', 'Last Message', 'Extracted Information', 'Date'].map((h) =>
-                  React.createElement('th', { key: h }, h)
-                )
+          campaignReport.length === 0
+            ? React.createElement('div', { className: 'muted' }, 'No campaign activity yet.')
+            : React.createElement('div', { className: 'activity-list' },
+                campaignReport.map((item, idx) => {
+                  const record = normalizeRecord(item);
+                  return React.createElement(ActivityCard, {
+                    key: idx,
+                    record: record,
+                    onView: () => setActivityModal(record)
+                  });
+                })
               )
-            ),
-            React.createElement('tbody', null,
-              campaignReport.length === 0
-                ? React.createElement('tr', null, React.createElement('td', { colSpan: 5 }, 'No campaign activity yet.'))
-                : campaignReport.map((item, idx) =>
-                    React.createElement('tr', { key: idx },
-                      React.createElement('td', null, item.campaign),
-                      React.createElement('td', null, item.last_update),
-                      React.createElement('td', null, item.last_message),
-                      React.createElement('td', null, item.extracted_info),
-                      React.createElement('td', null, item.date)
-                    )
-                  )
-            )
-          )
         ),
         React.createElement('div', { className: 'card', style: { marginBottom: '18px' } },
           React.createElement('h2', { style: { marginTop: 0 } }, 'Visitor Questions'),
@@ -834,7 +1209,11 @@
                   )
             )
           )
-        )
+        ),
+        activityModal && React.createElement(ActivityDetailsModal, {
+          record: activityModal,
+          onClose: () => setActivityModal(null)
+        })
       );
     }
 
