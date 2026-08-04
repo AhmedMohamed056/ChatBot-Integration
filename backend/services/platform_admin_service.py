@@ -104,12 +104,13 @@ def record_audit(
     entity_type: str,
     entity_id: str,
     actor_id: str = "admin",
+    actor_type: str = "admin",
     before_data: Optional[dict] = None,
     after_data: Optional[dict] = None,
 ) -> None:
     session.add(
         AuditEvent(
-            actor_type="admin",
+            actor_type=actor_type,
             actor_id=actor_id,
             action=action,
             entity_type=entity_type,

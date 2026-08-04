@@ -56,7 +56,7 @@ _CREATE = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 _UPDATE = re.compile(
-    r"(?:تحديث|تعديل|update\s+campaign|change\s+campaign)",
+    r"(?:تحديث|تعديل|غير|update\s+campaign|change\s+campaign)",
     re.IGNORECASE | re.UNICODE,
 )
 _DELETE = re.compile(

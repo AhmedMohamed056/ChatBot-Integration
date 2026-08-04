@@ -15,6 +15,7 @@ from db.repositories.platform_repository import OutboxRepository
 from services.conversation_memory_service import ConversationMemoryService
 from services.conversation_service import ConversationService
 from services.intent_router import Intent, detect_intent
+from services.platform_admin_service import record_audit
 from services.supervisor_context_service import (
     build_supervisor_context,
     build_supervisor_greeting,
@@ -396,6 +397,15 @@ class CampaignLifecycleService:
                 "snapshot": snapshot,
             },
         )
+        record_audit(
+            self.session,
+            action="campaign.create" if created else "campaign.update",
+            entity_type="campaign",
+            entity_id=str(campaign.id),
+            actor_id=supervisor.phone_number,
+            actor_type="supervisor",
+            after_data=snapshot,
+        )
         self.conversations.set_state(
             state, state_name="IDLE", state_data={"draft": {}, "missing": []}
         )
@@ -429,6 +439,16 @@ class CampaignLifecycleService:
             aggregate_id=str(campaign.id),
             event_type="campaign.deleted",
             payload={"campaign_id": campaign.id},
+        )
+        record_audit(
+            self.session,
+            action="campaign.delete",
+            entity_type="campaign",
+            entity_id=str(campaign.id),
+            actor_id=supervisor.phone_number,
+            actor_type="supervisor",
+            before_data={"status": "active"},
+            after_data={"status": "deleted"},
         )
         self.conversations.set_state(
             state, state_name="IDLE", state_data={"draft": {}, "missing": []}

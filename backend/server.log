@@ -1,1 +1,77 @@
+INFO:     Will watch for changes in these directories: ['D:\\projects-new\\ChatBot-Integration\\backend']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [27304] using WatchFiles
+D:\projects-new\ChatBot-Integration\backend\gemini_client.py:11: FutureWarning: 
+
+All support for the `google.generativeai` package has ended. It will no longer be receiving 
+updates or bug fixes. Please switch to the `google.genai` package as soon as possible.
+See README for more details:
+
+https://github.com/google-gemini/deprecated-generative-ai-python/blob/main/README.md
+
+  import google.generativeai as genai
+INFO:     Started server process [9312]
+INFO:     Waiting for application startup.
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
 📚 Building knowledge base from 1 file(s)...
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 4653.53it/s]
+INFO:     Application startup complete.
+------------------------------------
+Loading and splitting all supported files...
+Total chunks: 4
+Time: 0.4 sec
+------------------------------------
+Creating embeddings and saving to Chroma...
+Embedding: 4 / 4
+Finished
+Done
+Time: 10.2 sec
+Refreshing retriever
+Refreshing qa_chain
+✅ Knowledge base ready.
+INFO:     127.0.0.1:59984 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59985 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60028 - "GET /admin/dashboard HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60028 - "GET /admin/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60028 - "GET /admin/files HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60028 - "GET /admin/campaigns HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60028 - "GET /admin/reports/campaign-activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60031 - "GET /admin/reports/visitor-questions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60076 - "GET /admin/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60076 - "GET /admin/files HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60076 - "GET /admin/campaigns HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60077 - "GET /admin/campaigns/1/messages HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60077 - "GET /admin/campaigns/1/versions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60079 - "GET /admin/reports/campaign-activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60079 - "GET /admin/reports/visitor-questions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60079 - "GET /admin/audit?limit=100 HTTP/1.1" 200 OK
+ai_context_builder: detect_visitor failed: (sqlite3.OperationalError) no such column: campaign_visitors.campaign_id
+[SQL: SELECT campaign_visitors.id, campaign_visitors.campaign_id, campaign_visitors.campaign_name, campaign_visitors.visitor_name, campaign_visitors.phone_number, campaign_visitors.created_at, campaign_visitors.updated_at 
+FROM campaign_visitors 
+WHERE campaign_visitors.phone_number = ?]
+[parameters: ('201025223892',)]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+INFO:     127.0.0.1:60097 - "POST /chat/message HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60118 - "POST /chat/message HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60123 - "POST /chat/message HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60135 - "GET /admin/dashboard HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60135 - "GET /admin/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60135 - "GET /admin/files HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60135 - "GET /admin/campaigns HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60135 - "GET /admin/campaigns/1/messages HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60138 - "GET /admin/campaigns/1/versions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60138 - "GET /admin/campaigns/2/messages HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60135 - "GET /admin/campaigns/2/versions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60143 - "GET /admin/reports/campaign-activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60144 - "GET /admin/reports/visitor-questions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60145 - "GET /admin/audit?limit=100 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60145 - "GET /admin/settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60153 - "GET /admin/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60339 - "GET /admin/files HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60339 - "GET /admin/campaigns HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60339 - "GET /admin/campaigns/2/messages HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60340 - "GET /admin/campaigns/2/versions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60352 - "GET /admin/reports/campaign-activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60353 - "GET /admin/reports/visitor-questions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60354 - "GET /admin/audit?limit=100 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60354 - "GET /admin/settings HTTP/1.1" 200 OK

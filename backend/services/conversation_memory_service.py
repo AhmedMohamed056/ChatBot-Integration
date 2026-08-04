@@ -302,7 +302,10 @@ class ConversationMemoryService:
             memory_key=memory_key,
             memory_value=value
         )
-        self.session.commit()
+        # NOTE: Do NOT commit here. The session is managed by the outer
+        # get_session() context manager in message_orchestrator.py.
+        # Committing here would prevent CampaignLifecycleService from persisting
+        # CampaignUpdate, CampaignVersion, and OutboxEvent objects.
 
     def update_memory_from_message(
         self,
@@ -648,7 +651,8 @@ class ConversationMemoryService:
                 ConversationMemory.conversation_id == conversation_id
             )
         )
-        self.session.commit()
+        # NOTE: Do NOT commit here. The session is managed by the outer
+        # get_session() context manager.
 
     def clear_memory_field(self, conversation_id: int, memory_key: str) -> None:
         """Clear a specific memory field for a conversation."""
@@ -660,7 +664,8 @@ class ConversationMemoryService:
         )
         if memory:
             self.session.delete(memory)
-            self.session.commit()
+            # NOTE: Do NOT commit here. The session is managed by the outer
+            # get_session() context manager.
 
     def clear_task_state(self, conversation_id: int) -> None:
         """Clear task-specific state while preserving conversation history.
