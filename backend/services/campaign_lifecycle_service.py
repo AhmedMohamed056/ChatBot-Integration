@@ -89,6 +89,24 @@ class CampaignLifecycleService:
         pending = state.state_name == "WAITING_FOR_CONFIRMATION"
         intent_result = detect_intent(message, pending_confirmation=pending)
 
+        # A "command trigger" is the very first mutation message that opens a
+        # draft (e.g. "غير وصف الحملة") sent from a non-collecting state. Its
+        # text is a COMMAND, never content — so it must not populate the
+        # description and must not jump to confirmation. Content only arrives on
+        # later turns (a missing-field reply, or a correction while confirming),
+        # which are always in one of the collecting states below.
+        _COLLECTING_STATES = {
+            "COLLECTING",
+            "WAITING_FOR_MISSING_FIELD",
+            "WAITING_FOR_CONFIRMATION",
+        }
+        is_command_trigger = (
+            not pending
+            and state.state_name not in _COLLECTING_STATES
+            and intent_result.intent
+            in {Intent.CREATE_CAMPAIGN, Intent.UPDATE_CAMPAIGN}
+        )
+
         if intent_result.intent == Intent.CANCEL:
             self.conversations.set_state(
                 state, state_name="IDLE", state_data={"draft": {}, "missing": []}
@@ -161,6 +179,11 @@ class CampaignLifecycleService:
             draft.setdefault("original_request", message)
             if owned and not draft.get("campaign_name"):
                 draft.update(seed_draft_from_campaign(owned))
+                # A fresh mutation command must not inherit the campaign's
+                # existing description as the new candidate value — the
+                # supervisor is asked for fresh content instead.
+                if is_command_trigger:
+                    draft.pop("description", None)
             extraction = extract_campaign_update(message)
             if extraction is not None:
                 if extraction.operation:
@@ -168,7 +191,11 @@ class CampaignLifecycleService:
                     data["operation"] = operation
                 if extraction.campaign_name and not owned:
                     draft["campaign_name"] = extraction.campaign_name
-            self._merge_extraction(draft, message, operation)
+            # The command sentence itself (e.g. "غير وصف الحملة") must NEVER
+            # become the description. Only merge content from genuine content
+            # turns — never from the initial command that opened the draft.
+            if not is_command_trigger:
+                self._merge_extraction(draft, message, operation, owned=owned)
             missing = _missing_fields(draft, operation=operation)
             if missing:
                 data["draft"] = draft
@@ -249,18 +276,54 @@ class CampaignLifecycleService:
                 response=None
             )
 
+        # A supervisor asking a general knowledge question in private is a
+        # visitor knowledge question too — record it into the SAME dashboard
+        # pipeline as website/group questions (no parallel reporting system).
+        from whatsapp_question_log import log_whatsapp_question
+
+        log_whatsapp_question(message, result.reply, phone=supervisor.phone_number)
+
         return result.reply if result.handled else ""
 
     def _merge_extraction(
-        self, draft: dict[str, Any], message: str, operation: str
+        self,
+        draft: dict[str, Any],
+        message: str,
+        operation: str,
+        *,
+        owned: Optional[Campaign] = None,
     ) -> None:
         text = message.strip()
         if operation == "delete":
             if not draft.get("deletion_reason"):
                 draft["deletion_reason"] = text
             return
-        if text:
+        if not text:
+            return
+
+        # The edit operation (replace/append/modify/remove) is carried by the
+        # ORIGINAL command that opened the draft (e.g. "أضف معلومة"، "احذف"),
+        # not by this content turn — the content turn is the payload to apply.
+        from services.campaign_description_generator import (
+            detect_operation_type,
+            generate_final_description,
+        )
+
+        current_description = ((owned.description if owned else "") or "").strip()
+        op_type = detect_operation_type(draft.get("original_request") or "")
+
+        # With no existing description, or an explicit full replacement, the
+        # content turn IS the new description — no merge needed. Otherwise ask
+        # the generator to apply the operation against the approved text.
+        if not current_description or op_type == "replace":
             draft["description"] = text
+        else:
+            draft["description"] = generate_final_description(
+                current_description=current_description,
+                supervisor_request=text,
+                operation=op_type,
+            )
+
         for token in text.split():
             if token.count("-") == 2 and len(token) >= 8:
                 if not draft.get("start_date"):

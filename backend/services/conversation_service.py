@@ -109,6 +109,7 @@ class ConversationService:
         state.state_name = state_name
         state.state_data = state_data
         state.expires_at = _utcnow() + timedelta(days=ttl_days)
+        self.session.flush()  # Persist immediately to avoid lost updates
 
     def upsert_memory(
         self,

@@ -20,12 +20,14 @@ class Intent(str, Enum):
     UNKNOWN = "unknown"
 
 
+# Only true state-changing intents belong here. CAMPAIGN_INQUIRY is a
+# read-only knowledge question ("ما هي حملة X؟") and must NOT be blocked in
+# groups — it is answered through the normal visitor/RAG flow.
 CAMPAIGN_MUTATION_INTENTS = frozenset(
     {
         Intent.CREATE_CAMPAIGN,
         Intent.UPDATE_CAMPAIGN,
         Intent.DELETE_CAMPAIGN,
-        Intent.CAMPAIGN_INQUIRY,
     }
 )
 
@@ -56,7 +58,10 @@ _CREATE = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 _UPDATE = re.compile(
-    r"(?:تحديث|تعديل|غير|update\s+campaign|change\s+campaign)",
+    r"(?:تحديث|تعديل|عدّل|عدل|غيّر|غير|بدّل|بدل|استبدل|"
+    r"أضف|اضف|أضِف|زوّد|زود|احذف|إحذف|امسح|شيل|"
+    r"update\s+campaign|change\s+campaign|edit\s+campaign|"
+    r"add\s+to\s+campaign|append|modify)",
     re.IGNORECASE | re.UNICODE,
 )
 _DELETE = re.compile(

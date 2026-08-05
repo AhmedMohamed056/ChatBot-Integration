@@ -95,6 +95,7 @@ def _coerce_context(context: Any) -> AIContext:
                 language=context.get("language") or "ar",
                 raw_message=context.get("raw_message") or "",
                 conversation_memory=context.get("conversation_memory"),
+                retrieved_knowledge=context.get("retrieved_knowledge"),
             )
         except Exception:
             return AIContext()
@@ -196,6 +197,25 @@ def _campaign_knowledge_section(ctx: AIContext) -> list[str]:
             lines.append(f"Fact {i}: {fact.strip()}")
 
     return lines
+
+def _retrieved_knowledge_section(ctx: AIContext) -> list[str]:
+    """Build the RELEVANT KNOWLEDGE section from shared vector retrieval.
+
+    These are snippets retrieved from the shared Chroma store (approved
+    campaigns + uploaded documents). Supporting reference material — ranked
+    below the authoritative supervisor-taught CAMPAIGN KNOWLEDGE facts.
+    """
+    snippets = ctx.retrieved_knowledge
+    if not isinstance(snippets, list) or not snippets:
+        return []
+
+    lines = ["RELEVANT KNOWLEDGE (من قاعدة المعرفة)"]
+    lines.append("معلومات مسترجعة من قاعدة المعرفة قد تساعد في الإجابة.")
+    for i, snippet in enumerate(snippets, 1):
+        if isinstance(snippet, str) and snippet.strip():
+            lines.append(f"[{i}] {snippet.strip()}")
+    return lines
+
 
 def _supervisor_section(ctx: AIContext) -> list[str]:
     """Build the SUPERVISOR section for authorized WhatsApp supervisors."""
@@ -457,6 +477,12 @@ def build_prompt(system_prompt: str, context: Union[AIContext, dict, None]) -> s
     campaign_lines = _campaign_section(ctx)
     if campaign_lines:
         sections.append(campaign_lines)
+
+    # Retrieved knowledge - supporting reference material from the shared
+    # vector store (ranked below the authoritative campaign-knowledge facts).
+    retrieved_lines = _retrieved_knowledge_section(ctx)
+    if retrieved_lines:
+        sections.append(retrieved_lines)
 
     visitor_lines = _visitor_section(ctx)
     if visitor_lines:

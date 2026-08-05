@@ -118,11 +118,50 @@ def list_supported_files() -> list[Path]:
     )
 
 
-def rebuild_vectordb(embedding_function, db_dir: str):
-    from langchain_community.vectorstores import Chroma
+def _force_rmtree(path: str) -> bool:
+    """Best-effort recursive delete that tolerates Windows file locks.
 
-    if os.path.exists(db_dir):
-        shutil.rmtree(db_dir)
+    Returns True if the directory was removed (or never existed), False if it
+    could not be cleared because another process holds a handle on it. Callers
+    use the False case to degrade gracefully instead of crashing startup.
+    """
+    if not os.path.exists(path):
+        return True
+
+    def _on_error(func, target, exc_info):
+        # Clear the read-only bit (common on Windows) and retry once.
+        import stat
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except Exception:
+            pass
+
+    for _ in range(3):
+        shutil.rmtree(path, onerror=_on_error)
+        if not os.path.exists(path):
+            return True
+        time.sleep(0.5)
+    return not os.path.exists(path)
+
+
+def rebuild_vectordb(embedding_function, db_dir: str):
+    from langchain_chroma import Chroma
+
+    # Try to clear the old index. On Windows, Chroma's SQLite/HNSW files stay
+    # locked while any other process (a lingering server instance, a worker)
+    # holds the store open — rmtree then raises WinError 32. Rather than let
+    # that crash application startup, fall back to opening the existing store
+    # in place: it already contains the previously-built embeddings.
+    if os.path.exists(db_dir) and not _force_rmtree(db_dir):
+        print(
+            f"⚠️  Could not clear {db_dir} (locked by another process); "
+            "reusing the existing index instead of rebuilding."
+        )
+        return Chroma(
+            embedding_function=embedding_function,
+            persist_directory=db_dir,
+        )
 
     print("------------------------------------")
     print("Loading and splitting all supported files...")

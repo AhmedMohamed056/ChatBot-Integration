@@ -106,6 +106,7 @@ class AIContext:
     language: str = "ar"
     raw_message: str = ""
     conversation_memory: Optional[dict[str, Any]] = None
+    retrieved_knowledge: Optional[list[str]] = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a plain dict (stable, JSON-friendly contract)."""
@@ -256,6 +257,11 @@ def build_context(
     if conversation_id:
         conversation_memory = _load_conversation_memory(conversation_id)
 
+    # --- Retrieved knowledge (shared Chroma store) -------------------------
+    # Reuses the SAME vector store as the website chain / campaign indexer, so
+    # WhatsApp/visitor questions can find approved campaigns and uploaded docs.
+    retrieved_knowledge = _load_retrieved_knowledge(raw_message)
+
     return AIContext(
         visitor=visitor,
         campaign=campaign,
@@ -269,7 +275,25 @@ def build_context(
         language=language,
         raw_message=raw_message,
         conversation_memory=conversation_memory,
+        retrieved_knowledge=retrieved_knowledge,
     )
+
+def _load_retrieved_knowledge(message: str) -> Optional[list[str]]:
+    """Retrieve relevant snippets from the shared Chroma store.
+
+    Reuses :func:`services.knowledge_retrieval_service.retrieve_knowledge`
+    (which shares the website/indexer vector store). Returns ``None`` when
+    nothing is found or on any failure, so the prompt section is omitted.
+    """
+    try:
+        from services.knowledge_retrieval_service import retrieve_knowledge
+
+        snippets = retrieve_knowledge(message)
+        return snippets or None
+    except Exception as exc:  # noqa: BLE001
+        print(f"ai_context_builder: Failed to retrieve knowledge: {exc}")
+        return None
+
 
 def _load_conversation_memory(conversation_id: int) -> Optional[dict[str, Any]]:
     """Load conversation memory for a given conversation ID."""

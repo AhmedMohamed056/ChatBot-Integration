@@ -8,9 +8,9 @@ from the Gemini API without any business logic.
 import logging
 import os
 from typing import Optional
-import google.generativeai as genai
-from google.generativeai import types
-from google.api_core import exceptions as google_exceptions
+from google import genai
+from google.genai import types
+from google.genai import errors as genai_errors
 import requests
 
 # Custom Exceptions
@@ -85,11 +85,9 @@ class GeminiClient:
         self.model_name = model_name or os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
 
         try:
-            genai.configure(api_key=self.api_key)
-            # Initialize the model once
-            self.model = genai.GenerativeModel(
-                model_name=self.model_name
-            )
+            # The new google-genai SDK uses a Client object; the model name is
+            # passed per-request rather than bound at construction time.
+            self.client = genai.Client(api_key=self.api_key)
             self._initialized = True
         except Exception as e:
             logger.error(f"Failed to initialize Gemini SDK: {e}")
@@ -127,64 +125,50 @@ class GeminiClient:
             raise GeminiClientError("Client not initialized. Call __init__ first.")
 
         try:
-            # Create generation config
-            generation_config = types.GenerationConfig(
+            # Build generation config
+            config = types.GenerateContentConfig(
                 temperature=temperature,
-                max_output_tokens=max_output_tokens
+                max_output_tokens=max_output_tokens,
+                system_instruction=system_prompt,
+                http_options=types.HttpOptions(timeout=60000),  # 60s in ms
             )
 
-            # Build the prompt - combine system and user prompts
-            # Note: The Gemini API (via google.generativeai) doesn't support system role directly
-            # So we prepend the system prompt to the user prompt
-            combined_prompt = f"{system_prompt}\n\n{user_prompt}"
-            messages = [{"role": "user", "parts": [combined_prompt]}]
-
-            # Send the request using the pre-initialized model
-            response = self.model.generate_content(
-                messages,
-                generation_config=generation_config,
-                request_options={"timeout": 60}
+            # Generate content using the new SDK
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=user_prompt,
+                config=config,
             )
 
-            # Check for empty response
+            # Extract text from response
             if not response or not response.text:
                 logger.error("Empty response from Gemini API")
                 raise GeminiResponseError("Empty response from Gemini API")
 
-            # Return plain text
             return response.text
 
-        except google_exceptions.PermissionDenied as e:
-            logger.error(f"Authentication failed: {e}")
-            raise GeminiAuthenticationError(f"Authentication failed: {e}") from e
-
-        except google_exceptions.ResourceExhausted as e:
-            logger.error(f"Rate limit exceeded: {e}")
-            raise GeminiRateLimitError(f"Rate limit exceeded: {e}") from e
-
-        except google_exceptions.DeadlineExceeded as e:
-            logger.error(f"Request timed out: {e}")
-            raise GeminiTimeoutError(f"Request timed out: {e}") from e
-
-        except google_exceptions.ServiceUnavailable as e:
-            logger.error(f"Service unavailable (rate limited): {e}")
-            raise GeminiRateLimitError(f"Service unavailable (rate limited): {e}") from e
-
-        except google_exceptions.GoogleAPICallError as e:
-            # Handle various API call errors
+        except genai_errors.ClientError as e:
+            # Client-side errors (invalid request, auth, etc.)
             error_str = str(e).lower()
-            if "quota" in error_str or "rate" in error_str:
-                logger.error(f"API quota exceeded: {e}")
-                raise GeminiRateLimitError(f"API quota exceeded: {e}") from e
-            elif "permission" in error_str or "api key" in error_str:
-                logger.error(f"API key error: {e}")
-                raise GeminiAuthenticationError(f"API key error: {e}") from e
-            elif "timeout" in error_str or "deadline" in error_str:
-                logger.error(f"Request timed out: {e}")
-                raise GeminiTimeoutError(f"Request timed out: {e}") from e
-            else:
-                logger.error(f"API call error: {e}")
-                raise GeminiClientError(f"API call error: {e}") from e
+            if "api key" in error_str or "authentication" in error_str or "permission" in error_str:
+                logger.error(f"Authentication failed: {e}")
+                raise GeminiAuthenticationError(f"Authentication failed: {e}") from e
+            logger.error(f"Client error: {e}")
+            raise GeminiClientError(f"Client error: {e}") from e
+
+        except genai_errors.ServerError as e:
+            # Server-side errors (rate limit, quota, service unavailable)
+            error_str = str(e).lower()
+            if "quota" in error_str or "rate" in error_str or "resource exhausted" in error_str:
+                logger.error(f"Rate limit exceeded: {e}")
+                raise GeminiRateLimitError(f"Rate limit exceeded: {e}") from e
+            logger.error(f"Server error: {e}")
+            raise GeminiClientError(f"Server error: {e}") from e
+
+        except genai_errors.APIError as e:
+            # Generic API errors
+            logger.error(f"API error: {e}")
+            raise GeminiClientError(f"API error: {e}") from e
 
         except requests.exceptions.Timeout as e:
             logger.error(f"Network timeout: {e}")

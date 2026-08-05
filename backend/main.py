@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_classic.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
@@ -774,6 +774,13 @@ async def startup_event():
 
     set_setting("private_unauthorized_mode", "ignore")
 
+    # Auto-drain the transactional outbox in the background so approved
+    # campaign versions get indexed into Chroma without running worker.py
+    # by hand. Reuses worker.process_pending_outbox; does not touch _commit.
+    from services.outbox_drainer import start_outbox_drainer
+
+    start_outbox_drainer()
+
     # Remove DB records for files that were deleted manually (not via the API)
     removed = cleanup_orphaned_file_records()
     if removed:
@@ -806,14 +813,9 @@ def build_enriched_question(message: str) -> str:
     )
 
 
-def looks_like_successful_answer(answer: str) -> bool:
-    failure_markers = [
-        "لم أجد معلومات موثقة",
-        "لا أستطيع تقديم إجابة مؤكدة",
-        "عذرًا، قاعدة المعرفة",
-        "Sorry, the AI service is currently overloaded",
-    ]
-    return not any(marker in answer for marker in failure_markers)
+# Answer-quality heuristic lives in a shared module so the WhatsApp pipeline
+# computes the "answered" flag identically (no duplicated marker list).
+from answer_quality import looks_like_successful_answer
 
 
 @app.post("/chat", response_model=ChatResponse)

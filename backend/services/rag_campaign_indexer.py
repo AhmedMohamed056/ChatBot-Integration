@@ -28,7 +28,7 @@ def _format_campaign_text(snapshot: dict[str, Any]) -> str:
 
 
 def _get_vectordb(db_dir: Optional[str] = None):
-    from langchain_community.vectorstores import Chroma
+    from langchain_chroma import Chroma
     from langchain_huggingface import HuggingFaceEmbeddings
 
     persist = db_dir or os.getenv("CHROMA_PERSIST_DIR", DEFAULT_CHROMA_DIR)

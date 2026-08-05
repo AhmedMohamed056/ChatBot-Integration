@@ -93,9 +93,15 @@ class MessageOrchestrator:
         intent = detect_intent(inbound.message).intent
         if intent in CAMPAIGN_MUTATION_INTENTS:
             return GROUP_CAMPAIGN_REFUSAL
-        return self._get_visitor_flow().handle_message(
+        # Knowledge question in a group: answer it via the visitor flow AND
+        # record it into the same dashboard pipeline as website questions.
+        result = self._get_visitor_flow().handle_message(
             phone=inbound.phone, message=inbound.message
-        ).reply
+        )
+        from whatsapp_question_log import log_whatsapp_question
+
+        log_whatsapp_question(inbound.message, result.reply, phone=inbound.phone)
+        return result.reply
 
     def _handle_supervisor_private(
         self, inbound: InboundMessage, authorized: Supervisor
