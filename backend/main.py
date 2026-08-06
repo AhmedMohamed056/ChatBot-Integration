@@ -804,6 +804,19 @@ async def startup_event():
     qa_chain = refresh_qa_chain()
     print("✅ Knowledge base ready.")
 
+    # refresh_qa_chain() wipes chroma_db and rebuilds it from uploaded files
+    # ONLY, which destroys the campaign embeddings added by the outbox drainer.
+    # Re-index all active campaigns from the DB (source of truth) so WhatsApp/
+    # group knowledge questions about campaigns can find them again.
+    try:
+        from services.rag_campaign_indexer import reindex_active_campaigns
+
+        count = reindex_active_campaigns()
+        if count:
+            print(f"✅ Re-indexed {count} active campaign(s) into the knowledge base.")
+    except Exception as exc:  # noqa: BLE001 - never let this break startup
+        print(f"⚠️  Campaign re-index skipped: {exc}")
+
 
 def build_enriched_question(message: str) -> str:
     datetime_context = format_datetime_context_block()

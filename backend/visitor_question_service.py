@@ -3,11 +3,12 @@
 Responsibilities (and **only** these):
 
 1. Normalise the phone number (reuses :mod:`phone_utils`).
-2. Detect the visitor (reuses :mod:`campaign_detection_service`).
-3. Determine ``visitor_name`` / ``campaign_name`` if available.
-4. Detect the language using a simple heuristic (Arabic / English / Unknown).
-5. Store everything via :class:`VisitorQuestionRepository`.
-6. Return a success result.
+2. Detect the language using a simple heuristic (Arabic / English / Unknown).
+3. Store everything via :class:`VisitorQuestionRepository`.
+4. Return a success result.
+
+Visitor-to-campaign detection has been removed from the system, so
+``visitor_name`` / ``campaign_name`` are always stored as ``NULL``.
 
 This service intentionally contains **no** reporting, analytics, AI,
 prompt-engineering, or Gemini logic.  It never fails because detection
@@ -21,7 +22,6 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from campaign_detection_service import detect_visitor
 from db.base import get_session, utc_now
 from db.repositories.visitor_question_repository import VisitorQuestionRepository
 from phone_utils import normalize_phone
@@ -107,21 +107,11 @@ def log_visitor_question(
         normalized = normalize_phone(phone_number)
         normalized_phone = normalized or None
 
-    # --- Detect visitor (reuse Campaign Detection) ------------------------
+    # --- Visitor detection removed ----------------------------------------
+    # Visitor-to-campaign detection is no longer part of the system. Questions
+    # are still logged, but always with NULL visitor/campaign values.
     visitor_name: Optional[str] = None
     campaign_name: Optional[str] = None
-
-    if normalized_phone:
-        try:
-            visitor = detect_visitor(normalized_phone)
-        except Exception:
-            # Never fail because detection failed.
-            logger.exception("Visitor detection failed; logging question anyway")
-            visitor = None
-
-        if visitor:
-            visitor_name = visitor.get("visitor_name")
-            campaign_name = visitor.get("campaign_name")
 
     # --- Detect language (simple heuristic) -------------------------------
     language = detect_language(question_text)

@@ -94,3 +94,70 @@ def process_outbox_event(event_type: str, payload: dict[str, Any], snapshot: dic
     campaign_id = int(payload["campaign_id"])
     version_number = int(payload["version_number"])
     index_campaign_version(campaign_id, version_number, snapshot)
+
+
+def reindex_active_campaigns(*, db_dir: Optional[str] = None) -> int:
+    """Re-index every active campaign into Chroma from the source-of-truth DB.
+
+    The website knowledge-base rebuild (:func:`document_service.rebuild_vectordb`)
+    wipes the whole ``chroma_db`` directory and repopulates it from uploaded
+    documents ONLY. That destroys the campaign embeddings added incrementally by
+    the outbox drainer, and — because those outbox events are already marked
+    processed — they are never re-added, so group knowledge questions about
+    campaigns find nothing.
+
+    This restores them: it reads the ``campaigns`` table directly (the single
+    source of truth) and re-indexes each active campaign, so campaign knowledge
+    survives every reboot regardless of outbox state. Safe to call repeatedly —
+    each campaign's prior embeddings are replaced.
+
+    Returns the number of campaigns re-indexed.
+    """
+    try:
+        from sqlalchemy import select
+
+        from db.base import get_session
+        from db.models import Campaign
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reindex_active_campaigns: imports failed: %s", exc)
+        return 0
+
+    # Read the campaigns first, then index outside the DB session so the
+    # embedding work never holds a SQLite transaction open.
+    try:
+        with get_session() as session:
+            campaigns = session.scalars(
+                select(Campaign).where(Campaign.status == "active")
+            ).all()
+            rows = [
+                (
+                    c.id,
+                    c.lock_version or 1,
+                    {
+                        "campaign_name": c.campaign_name,
+                        "description": c.description,
+                        "start_date": str(c.start_date) if c.start_date else None,
+                        "end_date": str(c.end_date) if c.end_date else None,
+                        "notes": c.notes,
+                    },
+                )
+                for c in campaigns
+            ]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reindex_active_campaigns: DB read failed: %s", exc)
+        return 0
+
+    indexed = 0
+    for campaign_id, version_number, snapshot in rows:
+        try:
+            index_campaign_version(
+                campaign_id, version_number, snapshot, db_dir=db_dir
+            )
+            indexed += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "reindex_active_campaigns: campaign %s failed: %s", campaign_id, exc
+            )
+    if indexed:
+        logger.info("Re-indexed %d active campaign(s) into Chroma", indexed)
+    return indexed

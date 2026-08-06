@@ -283,7 +283,13 @@ class CampaignLifecycleService:
 
         log_whatsapp_question(message, result.reply, phone=supervisor.phone_number)
 
-        return result.reply if result.handled else ""
+        # Always return a non-empty reply. On AI failure (e.g. a Gemini
+        # timeout) the flow sets handled=False but still carries an Arabic
+        # apology — returning "" here would leave the supervisor with total
+        # silence, which is exactly the bug we are fixing.
+        return result.reply or (
+            "أعتذر، حدث خطأ أثناء معالجة الطلب. من فضلك حاول مرة أخرى بعد قليل."
+        )
 
     def _merge_extraction(
         self,

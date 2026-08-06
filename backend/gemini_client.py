@@ -7,11 +7,22 @@ from the Gemini API without any business logic.
 
 import logging
 import os
+import socket
+import time
 from typing import Optional
 from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
-import requests
+
+try:  # httpx is the transport the google-genai SDK actually uses
+    import httpx
+except Exception:  # pragma: no cover - httpx is a hard dep of google-genai
+    httpx = None
+
+try:  # requests kept only for backwards-compatible exception matching
+    import requests
+except Exception:  # pragma: no cover
+    requests = None
 
 # Custom Exceptions
 class GeminiClientError(Exception):
@@ -40,6 +51,46 @@ class GeminiNetworkError(GeminiClientError):
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# --- Tunables (override via environment) -----------------------------------
+# Read timeout for a single Gemini request, in milliseconds. The google-genai
+# SDK expects this value in ms. Kept generous because a large supervisor prompt
+# can take a while, but bounded so a stuck socket never hangs the reply.
+DEFAULT_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "90000"))
+# How many times to attempt a single generate() call before giving up. Retries
+# only fire for transient failures (timeout / network / server / empty).
+DEFAULT_MAX_ATTEMPTS = max(1, int(os.getenv("GEMINI_MAX_ATTEMPTS", "3")))
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    """Best-effort detection of a read/connect timeout across transports.
+
+    The google-genai SDK uses httpx, whose timeouts (and the stdlib socket
+    "The read operation timed out" message underneath) are NOT
+    ``requests.exceptions.Timeout``. We match by type first, then fall back to
+    the message so no timeout is ever misfiled as an opaque "Unexpected error".
+    """
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    if httpx is not None and isinstance(exc, httpx.TimeoutException):
+        return True
+    if requests is not None and isinstance(exc, requests.exceptions.Timeout):
+        return True
+    msg = str(exc).lower()
+    return "timed out" in msg or "timeout" in msg or "deadline exceeded" in msg
+
+
+def _is_network_error(exc: BaseException) -> bool:
+    """Best-effort detection of a connection/transport failure (not a timeout)."""
+    if httpx is not None and isinstance(exc, httpx.TransportError):
+        return True
+    if requests is not None and isinstance(exc, requests.exceptions.ConnectionError):
+        return True
+    if isinstance(exc, (ConnectionError, socket.gaierror)):
+        return True
+    msg = str(exc).lower()
+    return "connection" in msg or "network" in msg or "temporarily unavailable" in msg
+
 
 class GeminiClient:
     """
@@ -124,69 +175,96 @@ class GeminiClient:
             logger.error("Client not initialized. Call __init__ first.")
             raise GeminiClientError("Client not initialized. Call __init__ first.")
 
-        try:
-            # Build generation config
-            config = types.GenerateContentConfig(
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
-                system_instruction=system_prompt,
-                http_options=types.HttpOptions(timeout=60000),  # 60s in ms
-            )
+        config = self._build_config(system_prompt, temperature, max_output_tokens)
 
-            # Generate content using the new SDK
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=user_prompt,
-                config=config,
-            )
+        # Retry only transient failures (timeout / network / server / empty).
+        # Authentication, rate-limit, and client (bad-request) errors are
+        # permanent for this call and re-raise immediately.
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, DEFAULT_MAX_ATTEMPTS + 1):
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=user_prompt,
+                    config=config,
+                )
 
-            # Extract text from response
-            if not response or not response.text:
-                logger.error("Empty response from Gemini API")
-                raise GeminiResponseError("Empty response from Gemini API")
+                if not response or not response.text:
+                    raise GeminiResponseError("Empty response from Gemini API")
 
-            return response.text
+                return response.text
 
-        except genai_errors.ClientError as e:
-            # Client-side errors (invalid request, auth, etc.)
-            error_str = str(e).lower()
-            if "api key" in error_str or "authentication" in error_str or "permission" in error_str:
-                logger.error(f"Authentication failed: {e}")
-                raise GeminiAuthenticationError(f"Authentication failed: {e}") from e
-            logger.error(f"Client error: {e}")
-            raise GeminiClientError(f"Client error: {e}") from e
+            except (GeminiAuthenticationError, GeminiRateLimitError):
+                raise
 
-        except genai_errors.ServerError as e:
-            # Server-side errors (rate limit, quota, service unavailable)
-            error_str = str(e).lower()
-            if "quota" in error_str or "rate" in error_str or "resource exhausted" in error_str:
-                logger.error(f"Rate limit exceeded: {e}")
-                raise GeminiRateLimitError(f"Rate limit exceeded: {e}") from e
-            logger.error(f"Server error: {e}")
-            raise GeminiClientError(f"Server error: {e}") from e
+            except genai_errors.ClientError as e:
+                error_str = str(e).lower()
+                if "api key" in error_str or "authentication" in error_str or "permission" in error_str:
+                    logger.error(f"Authentication failed: {e}")
+                    raise GeminiAuthenticationError(f"Authentication failed: {e}") from e
+                # Bad request — retrying won't help.
+                logger.error(f"Client error: {e}")
+                raise GeminiClientError(f"Client error: {e}") from e
 
-        except genai_errors.APIError as e:
-            # Generic API errors
-            logger.error(f"API error: {e}")
-            raise GeminiClientError(f"API error: {e}") from e
+            except genai_errors.ServerError as e:
+                error_str = str(e).lower()
+                if "quota" in error_str or "rate" in error_str or "resource exhausted" in error_str:
+                    logger.error(f"Rate limit exceeded: {e}")
+                    raise GeminiRateLimitError(f"Rate limit exceeded: {e}") from e
+                last_exc = GeminiClientError(f"Server error: {e}")
+                logger.warning(f"Server error (attempt {attempt}/{DEFAULT_MAX_ATTEMPTS}): {e}")
 
-        except requests.exceptions.Timeout as e:
-            logger.error(f"Network timeout: {e}")
-            raise GeminiTimeoutError(f"Network timeout: {e}") from e
+            except GeminiResponseError as e:
+                last_exc = e
+                logger.warning(f"Empty response (attempt {attempt}/{DEFAULT_MAX_ATTEMPTS}): {e}")
 
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"Connection error: {e}")
-            raise GeminiNetworkError(f"Connection error: {e}") from e
+            except Exception as e:
+                # Classify by transport signature so a real timeout is never
+                # buried as an opaque "Unexpected error" again.
+                if _is_timeout_error(e):
+                    last_exc = GeminiTimeoutError(f"Request timed out: {e}")
+                    logger.warning(f"Timeout (attempt {attempt}/{DEFAULT_MAX_ATTEMPTS}): {e}")
+                elif _is_network_error(e):
+                    last_exc = GeminiNetworkError(f"Network error: {e}")
+                    logger.warning(f"Network error (attempt {attempt}/{DEFAULT_MAX_ATTEMPTS}): {e}")
+                elif isinstance(e, genai_errors.APIError):
+                    last_exc = GeminiClientError(f"API error: {e}")
+                    logger.warning(f"API error (attempt {attempt}/{DEFAULT_MAX_ATTEMPTS}): {e}")
+                elif isinstance(e, ValueError):
+                    # Malformed response body — permanent for this call.
+                    logger.error(f"Invalid response format: {e}")
+                    raise GeminiResponseError(f"Invalid response format: {e}") from e
+                else:
+                    last_exc = GeminiClientError(f"Unexpected error: {e}")
+                    logger.warning(f"Unexpected error (attempt {attempt}/{DEFAULT_MAX_ATTEMPTS}): {e}")
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error: {e}")
-            raise GeminiNetworkError(f"Network error: {e}") from e
+            # Backoff before the next attempt (skip after the final attempt).
+            if attempt < DEFAULT_MAX_ATTEMPTS:
+                time.sleep(min(2 ** (attempt - 1), 4))
 
-        except ValueError as e:
-            # Handle JSON decode errors or similar
-            logger.error(f"Invalid response format: {e}")
-            raise GeminiResponseError(f"Invalid response format: {e}") from e
+        # All attempts exhausted — surface the classified error.
+        assert last_exc is not None
+        logger.error(f"Gemini request failed after {DEFAULT_MAX_ATTEMPTS} attempt(s): {last_exc}")
+        raise last_exc
 
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            raise GeminiClientError(f"Unexpected error: {e}") from e
+    def _build_config(
+        self, system_prompt: str, temperature: float, max_output_tokens: int
+    ) -> "types.GenerateContentConfig":
+        """Build the per-request generation config.
+
+        For ``flash`` models we disable "thinking" (thinking_budget=0). Flash
+        thinking adds significant latency for no quality gain on these short
+        assistant replies and is a common cause of the read timeout.
+        """
+        kwargs: dict = dict(
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            system_instruction=system_prompt,
+            http_options=types.HttpOptions(timeout=DEFAULT_TIMEOUT_MS),
+        )
+        if "flash" in (self.model_name or "").lower():
+            try:
+                kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+            except Exception:  # noqa: BLE001 - older SDKs lack ThinkingConfig
+                pass
+        return types.GenerateContentConfig(**kwargs)

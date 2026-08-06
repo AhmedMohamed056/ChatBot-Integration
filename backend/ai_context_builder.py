@@ -30,7 +30,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
-from campaign_detection_service import detect_visitor
 from campaign_update_extraction_service import extract_campaign_update
 from calendar_engine import search_by_date as search_calendar_by_date
 from current_date_provider import CurrentDateProvider
@@ -213,19 +212,26 @@ def build_context(
     raw_message = message if isinstance(message, str) else ""
     date_provider = provider or CurrentDateProvider()
 
-    # --- Visitor + Campaign (only when a phone is available) ---------------
+    # --- Campaign context (supervisors only) -------------------------------
+    # Visitor-to-campaign detection has been removed from the system. Plain
+    # visitors are no longer matched to a campaign by phone, so the visitor and
+    # campaign sections stay empty and the reply is built purely from RAG
+    # retrieval (uploaded knowledge + indexed campaign documents).
+    #
+    # Campaign context is now built ONLY for authorized supervisors — their
+    # workflow is unchanged: their campaign is resolved from their phone (or,
+    # as a fallback, their bound ``campaign_id``) and its knowledge is loaded.
     visitor: Optional[dict[str, Any]] = None
     campaign: Optional[dict[str, Any]] = None
     campaign_knowledge: Optional[list[str]] = None
-    if phone:
-        visitor = _safe_call(detect_visitor, phone)
-        campaign = _safe_call(get_campaign_by_phone, phone)
-        # Load campaign knowledge for this campaign
-        if campaign:
-            campaign_knowledge = _load_campaign_knowledge(campaign.get("id"))
-    elif supervisor is not None:
-        # For supervisors, load knowledge for their campaign
-        campaign_id = getattr(supervisor, 'campaign_id', None)
+    if supervisor is not None:
+        if phone:
+            campaign = _safe_call(get_campaign_by_phone, phone)
+        campaign_id = (
+            campaign.get("id")
+            if campaign
+            else getattr(supervisor, "campaign_id", None)
+        )
         if campaign_id:
             campaign_knowledge = _load_campaign_knowledge(campaign_id)
 
